@@ -150,8 +150,10 @@ export default function Office() {
   }
 
   const messages = useMemo(() => snap?.messages ?? [], [snap]);
-  const team = useMemo(() => messages.filter((m) => m.channel === "TEAM"), [messages]);
-  const noticeMsgs = useMemo(() => team.filter((m) => m.actor === "MANAGER" || m.actor === "SYSTEM"), [team]);
+  const teamAll = useMemo(() => messages.filter((m) => m.channel === "TEAM"), [messages]);
+  // 팀장 공지·시스템 알림은 '# 프로젝트-공지'에만, 팀 대화(이도현·나)는 '# 재참여-개선'에만 표시
+  const noticeMsgs = useMemo(() => teamAll.filter((m) => m.actor === "MANAGER" || m.actor === "SYSTEM"), [teamAll]);
+  const team = useMemo(() => teamAll.filter((m) => m.actor !== "MANAGER" && m.actor !== "SYSTEM"), [teamAll]);
   const assistantMsgs = useMemo(() => messages.filter((m) => m.channel === "ASSISTANT"), [messages]);
   useEffect(() => { if (channel === "notice") setNoticeSeen(noticeMsgs.length); }, [channel, noticeMsgs.length]);
 
@@ -254,6 +256,10 @@ export default function Office() {
             </span>
             <button className="btn btn-sm hide-md" onClick={() => showWork("assistant")}><Icon name="sparkle" />AI 어시스턴트</button>
           </div>
+          {channel === "team" && noticeUnread > 0 && (
+            <div className="sys-row" role="status"><div><Icon name="info" />새 공지 {noticeUnread}건: {noticeMsgs[noticeMsgs.length - 1]?.content.slice(0, 40)}…
+              <button className="btn btn-sm" onClick={() => setChannel("notice")}>공지 보기</button></div></div>
+          )}
           {snap.approvals.length > 0 && channel === "team" && (
             <div className="sys-row"><div><Icon name="warning" />{COPY.approval_title} · {snap.approvals.length}건
               <button className="btn btn-sm" onClick={() => showWork("doc")}>기획안에서 확인</button></div></div>
@@ -266,7 +272,7 @@ export default function Office() {
             readOnlyNote={submitted ? "제출된 세션입니다. 메시지를 보낼 수 없습니다." : "공지 채널에는 입력할 수 없습니다. # 재참여-개선 채널을 이용해 주세요."}
             busy={busyFor("COLLEAGUE")}
             placeholder={COPY.composer}
-            emptyText="프로젝트가 시작되었습니다. 팀장 안내를 확인하고, 필요한 자료를 읽거나 이도현 동료에게 말을 걸어 보세요."
+            emptyText={channel === "notice" ? "아직 공지가 없습니다." : "팀장 공지는 # 프로젝트-공지 채널에서 확인할 수 있어요. 이도현 동료에게 말을 걸어 보세요."}
             onSend={(t) => send("TEAM", t)} onRetry={retryRun}
             onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
             split={{ activeMessageId: activeSplitMessageId, confirmed: !!snap.split?.confirmed, onDecide: decideSplit }}

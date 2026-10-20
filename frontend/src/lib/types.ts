@@ -49,7 +49,7 @@ export const TASK_STATUS: Record<string, [string, string]> = {
 };
 export const CHANNELS = {
   notice: { id: "notice", name: "프로젝트-공지", desc: "팀장 공지와 시스템 알림입니다. 이 채널에는 입력할 수 없습니다." },
-  team: { id: "team", name: "재참여-개선", desc: "이도현 동료와 업무를 나누고 자료를 함께 확인하세요." },
+  team: { id: "team", name: "재참여-개선", desc: "이도현 동료와 업무를 나누고 자료를 함께 확인하세요. 팀장 공지는 # 프로젝트-공지에 올라옵니다." },
 } as const;
 export const COPY = {
   brief_title: "루프랩 프로덕트팀에 합류했습니다",

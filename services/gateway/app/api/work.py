@@ -72,18 +72,28 @@ def split(sid: str, body: SplitIn, p: Principal = Depends(candidate)):
                                                                                   "max_adjustments": sc["max_split_adjustments"]}})
             emit(c, sid, "COLLEAGUE_MESSAGE", {"message_id": str(m["id"]), "content": text, "citations": []})
             return {"split": {k: sp[k] for k in ("assignments", "adjustments_used", "confirmed")}}
-        if body.assignments != sp["assignments"]:
-            raise ApiError(409, "VERSION_CONFLICT", "확정은 마지막으로 합의한 분담안으로만 할 수 있습니다. 바꾸려면 조정을 요청해 주세요")
-        st["split"] = {**sp, "confirmed": True}
+        changed = body.assignments != sp["assignments"]
+        if changed:
+            # 지원자가 분담을 바꿔 확정: 조정 이력으로 기록하고 그대로 확정(동료는 지원자 의견을 받아 조정)
+            sp = {**sp, "adjustments_used": sp["adjustments_used"] + 1}
+            record_action(c, sid, "CANDIDATE", "SPLIT_ADJUSTED", sp["message_id"],
+                          {"assignments": body.assignments, "from": st["split"]["assignments"], "comment": body.comment,
+                           "count": sp["adjustments_used"], "elapsed_min": round(elapsed_min(s), 2)})
+        st["split"] = {**sp, "assignments": body.assignments, "confirmed": True}
         s["policy_state"] = st
         record_action(c, sid, "CANDIDATE", "SPLIT_CONFIRMED", sp["message_id"],
                       {"assignments": body.assignments, "adjustments_used": sp["adjustments_used"],
                        "elapsed_min": round(elapsed_min(s), 2)})
         apply_split(c, s, body.assignments, actor_id=p.sub)
-        text = "좋아요, 이 분담으로 진행할게요. 제가 맡은 부분은 자료를 확인해서 초안을 만든 뒤 문서에 넣기 전에 확인 요청드릴게요."
+        mine = [t["title"] for t in sc["task_templates"] if body.assignments.get(t["key"]) == "COLLEAGUE"]
+        joint = [t["title"] for t in sc["task_templates"] if body.assignments.get(t["key"]) == "JOINT"]
+        text = ("말씀하신 분담으로 조정해서 진행할게요. " if changed else "좋아요, 이 분담으로 진행할게요. ") + \
+               (f"제가 맡은 {', '.join(mine)}은(는) 자료를 확인해서 초안을 만든 뒤 문서에 넣기 전에 확인 요청드릴게요. " if mine else
+                "제가 단독으로 맡은 섹션은 없으니, 필요한 자료 조사나 초안이 있으면 채팅으로 말씀해 주세요. ") + \
+               (f"{', '.join(joint)}은(는) 같이 정리해요." if joint else "")
         m = insert_message(c, sid, "TEAM", "COLLEAGUE", text, meta={"kind": "SPLIT_RESPONSE"})
         emit(c, sid, "COLLEAGUE_MESSAGE", {"message_id": str(m["id"]), "content": text, "citations": []})
-    return {"split": {"assignments": body.assignments, "adjustments_used": sp["adjustments_used"], "confirmed": True}}
+    return {"split": {"assignments": body.assignments, "adjustments_used": sp["adjustments_used"], "confirmed": True, "changed": changed}}
 
 
 @router.delete("/sessions/{sid}/delegations/{did}", status_code=204)

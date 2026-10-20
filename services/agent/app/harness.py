@@ -67,7 +67,7 @@ class ContextPack:
     summarized_ids: list[str] = field(default_factory=list)
 
     def render_user_context(self) -> str:
-        parts = [f"[공개 브리프]\n{self.brief}"]
+        parts = [f"[팀장 과제 공지 — '# 프로젝트-공지' 채널의 첫 메시지]\n{self.brief}"]
         if self.summary:
             parts.append(f"[이전 대화 요약]\n{self.summary}")
         if self.delegation:

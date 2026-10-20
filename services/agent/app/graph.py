@@ -325,7 +325,11 @@ def reason(state: WorkState) -> dict:
         scen = ctx.get("scenario_state") or {}
         extra = []
         if not scen.get("interviews_released"):
-            extra.append("[아직 공유되지 않은 자료] 사용자 인터뷰 요약 — 내용을 본 것처럼 말하거나 인용하지 말 것. 01:05 이후 공유 예정.")
+            # 공개 시각은 00:50 지연 공지(T-DELAY) 이후에만 지원자에게 공개된 정보다
+            when = ("팀 공지 채널의 시스템 알림에 따르면 01:05에 공유될 예정이다." if "T-DELAY" in (scen.get("events") or [])
+                    else "공유 시점은 아직 안내되지 않았다. 시점을 추측하거나 말하지 마라.")
+            extra.append(f"[내부 메모 — 이 표기를 지원자에게 말하지 말 것] 자료실의 '사용자 인터뷰 요약'은 아직 잠겨 있다. "
+                         f"내용을 본 것처럼 말하거나 인용하지 마라. {when}")
         wanted = [d for d, words in DOC_HINTS.items() if any(w in state["request"] for w in words)]
         if state["intent"] == "policy_recheck" and "operating-policy" not in wanted:
             wanted.append("operating-policy")
@@ -348,6 +352,9 @@ def reason(state: WorkState) -> dict:
         art = (ctx.get("artifact") or {}).get("sections") or {}
         doc_lines = [f"{i + 1}. {SECTION_TITLE[k]}\n{H.truncate_tokens(art.get(k) or '(비어 있음)', 500)}"
                      for i, k in enumerate(["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"])]
+        extra.append("[작업 공간 안내 — 지원자가 실제로 보는 화면] 좌측 '자료실': 회사·서비스 소개, 지표 현황, 사용자 인터뷰 요약(잠김일 수 있음), "
+                     "운영 정책, 지난주 회의록 / 채널: '# 프로젝트-공지'(팀장 공지·시스템 알림), '# 재참여-개선'(팀 대화) / 우측 '기획안' 탭(5개 섹션), "
+                     "'태스크' 탭, 'AI 어시스턴트' 탭. 정보 위치를 물으면 이 이름으로 정확히 안내하고, 이 목록에 없는 문서·경로를 지어내지 마라.")
         extra.append("[현재 공유 기획안 — 섹션 번호는 아래 순서]\n" + "\n\n".join(doc_lines))
         if state["intent"] == "feedback":
             extra.append("[지시] 지원자가 작성한 섹션에 대한 피드백을 요청했다. 위 기획안 본문을 지금 읽고 이 메시지 안에서 바로 피드백하라. "
@@ -499,7 +506,7 @@ def validate_output(state: WorkState) -> dict:
         elif not r.get("skipped"):
             text = PROMISE_RE.sub("검토", text) + "\n(바로 작성할 섹션을 정하지 못했어요. 어느 섹션을 맡기실지 알려 주세요.)"
     out = {"answer": text, "output_rewrite_count": rewrites + (1 if problems else 0)}
-    if intent == "policy_recheck" and re.search(r"(철회|제외|빼|맞지 않|충돌|수정|정정)", text):
+    if intent == "policy_recheck" and re.search(r"(철회|제외|빼|맞지\s*않|충돌|수정|정정|적합하지\s*않|포함(할|될)\s*수\s*없|어렵|불가|안\s*되|하지\s*않는|출시하지\s*않)", text):
         out["facts"] = {**state["facts"], "corrected": True}
     return out
 

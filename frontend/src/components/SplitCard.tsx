@@ -7,6 +7,7 @@ type Props = {
   active: boolean; // 최신 제안이고 아직 확정 전일 때만 조작 가능
   confirmed: boolean;
   onDecide: (decision: "ACCEPT" | "ADJUST", assignments: Record<string, Owner>) => Promise<void>;
+  // 조정과 확정은 한 번에: 바뀐 분담으로 확정하면 서버가 조정 이력을 남긴다
 };
 const OWNERS: Owner[] = ["CANDIDATE", "JOINT", "COLLEAGUE"];
 
@@ -14,11 +15,10 @@ export function SplitCard({ proposal, active, confirmed, onDecide }: Props) {
   const [draft, setDraft] = useState<Record<string, Owner>>(proposal.assignments);
   const [busy, setBusy] = useState(false);
   const changed = SECTIONS.some((s) => draft[s.id] !== proposal.assignments[s.id]);
-  const left = proposal.max_adjustments - proposal.adjustments_used;
 
-  async function act(decision: "ACCEPT" | "ADJUST") {
+  async function act(kind: "ACCEPT" | "ADJUST_CONFIRM") {
     setBusy(true);
-    try { await onDecide(decision, decision === "ACCEPT" ? proposal.assignments : draft); } finally { setBusy(false); }
+    try { await onDecide("ACCEPT", kind === "ACCEPT" ? proposal.assignments : draft); } finally { setBusy(false); }
   }
 
   return (
@@ -49,11 +49,10 @@ export function SplitCard({ proposal, active, confirmed, onDecide }: Props) {
       </div>
       {active && (
         <div className="row">
-          {changed
-            ? <button className="btn btn-primary btn-sm" disabled={busy || left <= 0} onClick={() => act("ADJUST")}>이렇게 나누자고 제안하기</button>
-            : <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => act("ACCEPT")}>이 분담으로 확정</button>}
-          {changed && <button className="btn btn-sm" disabled={busy} onClick={() => setDraft(proposal.assignments)}>되돌리기</button>}
-          <span className="muted">조정 {left}회 남음 · 확정한 담당은 태스크 보드에 반영됩니다</span>
+          <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(changed ? "ADJUST_CONFIRM" : "ACCEPT")}>
+            {changed ? "바꾼 분담으로 확정" : "이 분담으로 확정"}</button>
+          {changed && <button className="btn btn-sm" disabled={busy} onClick={() => setDraft(proposal.assignments)}>제안대로 되돌리기</button>}
+          <span className="muted">담당을 바꾼 뒤 확정하면 이도현 님이 맞춰 진행하고, 확정한 담당은 태스크 보드에 반영됩니다</span>
         </div>
       )}
     </div>
