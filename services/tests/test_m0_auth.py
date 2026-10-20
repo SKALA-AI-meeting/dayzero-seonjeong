@@ -64,13 +64,15 @@ def test_invite_single_use_and_start_idempotent():
     assert r2.status_code == 409 and r2.json()["error"]["code"] == "ALREADY_USED"
     # 같은 브라우저 재교환 → 같은 세션
     assert c.post("/auth/exchange", json={"token": token}).json()["session_id"] == sid
-    # start 2회 → 킥오프/태스크 1회
+    # start 2회 → E0 스탠드업/보드 1회
     for _ in range(2):
         r = c.post(f"/sessions/{sid}/start", json={"consent": True}, headers={"X-CSRF-Token": csrf})
         assert r.status_code == 200 and r.json()["session"]["status"] == "ACTIVE"
     snap = c.get(f"/sessions/{sid}").json()
-    assert [m["actor"] for m in snap["messages"]] == ["MANAGER", "COLLEAGUE"]  # 00:00 킥오프 1회(팀장 브리프 + 동료 인사)
-    assert len(snap["tasks"]) == 5 and snap["artifact"]["version"] == 1
+    assert [m["actor"] for m in snap["messages"]] == ["MANAGER", "COLLEAGUE"]  # E0 1회(팀장 지시 + 서윤 분업 질문)
+    assert [t["key"] for t in snap["tasks"]] == ["T1", "T2", "T3"]  # T4는 E4, T5는 E2에서 추가
+    assert {a["key"]: a["version"] for a in snap["artifacts"]} == {"T1": 1, "T2": 1, "T3": 1}
+    assert snap["session"]["turn_count"] == 0 and snap["clock"]["virtual_time"] == "09:00"
 
 
 def test_csrf_and_origin_required():

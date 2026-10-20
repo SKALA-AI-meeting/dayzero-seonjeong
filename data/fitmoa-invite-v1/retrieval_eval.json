@@ -1,0 +1,7 @@
+[
+  {"query": "친구 초대 이벤트 기간이 언제부터 언제까지인가요", "expected": ["brief", "reward-table"]},
+  {"query": "친구를 초대하면 몇 포인트를 받나요", "expected": ["brief", "reward-table", "faq-draft"]},
+  {"query": "고객 공지 문장은 몇 자 이내로 써야 하나요", "expected": ["tone-guide"]},
+  {"query": "가족 계정이나 같은 결제수단 계정도 리워드를 받나요", "expected": ["brief", "faq-draft", "reward-table"]},
+  {"query": "오늘 준비해야 하는 고객 안내 자료 목록", "expected": ["brief"]}
+]

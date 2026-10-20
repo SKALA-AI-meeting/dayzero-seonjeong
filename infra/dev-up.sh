@@ -27,7 +27,7 @@ echo "✓ DB(:$DB_PORT) 준비"
 echo "== 2. 의존성·마이그레이션·seed·색인 =="
 (cd services && uv sync -q && uv run alembic upgrade head && uv run python -m scripts.seed)
 CHUNKS=$(docker exec dayzero-db psql -U dayzero -tAc "select count(*) from document_chunks" 2>/dev/null || echo 0)
-if [ "${CHUNKS// /}" = "0" ]; then (cd services && uv run python -m scripts.index_documents --scenario moarun-rejoin-v1); else echo "✓ 벡터 색인 있음($CHUNKS 청크)"; fi
+if [ "${CHUNKS// /}" = "0" ]; then (cd services && uv run python -m scripts.index_documents); else echo "✓ 벡터 색인 있음($CHUNKS 청크)"; fi
 [ -d frontend/node_modules ] || (cd frontend && npm ci --silent)
 
 echo "== 3. 서비스 =="

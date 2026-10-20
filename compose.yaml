@@ -44,7 +44,7 @@ services:
     <<: *py
     profiles: [tools]
     restart: "no"
-    command: uv run python -m scripts.index_documents --scenario moarun-rejoin-v1
+    command: uv run python -m scripts.index_documents
     environment:
       INDEXER_DATABASE_URL: postgresql://dayzero_indexer:local_demo_only@db:5432/dayzero
     volumes: [hfcache:/app/.cache/hf]

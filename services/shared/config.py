@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data" / "moarun-rejoin-v1"
+DATA_DIR = ROOT / "data" / "fitmoa-invite-v1"
 PROMPTS_DIR = ROOT / "prompts"
 
 
@@ -42,7 +42,7 @@ class Settings:
         self.rag_mode = g("RAG_MODE", "vector")
         self.embedding_model = g("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         self.embedding_dimension = int(g("EMBEDDING_DIMENSION", "384"))
-        self.index_version = g("INDEX_VERSION", "moarun-index-v1")
+        self.index_version = g("INDEX_VERSION", "fitmoa-index-v1")
         self.llm_mode = g("LLM_MODE", "fixture")
         self.openai_model = g("OPENAI_MODEL", "gpt-4o-mini")
         self.jwt_secret = g("JWT_SECRET", "")
@@ -51,6 +51,8 @@ class Settings:
         self.seed_admin_password = g("SEED_ADMIN_PASSWORD", "")
         self.langsmith_enabled = bool(g("LANGSMITH_API_KEY")) and g("LANGSMITH_TRACING", "true") == "true"
         self.langsmith_project = g("LANGSMITH_PROJECT", "dayzero-seonjeong-mvp")
+        # E4(마감 전 브리핑)는 optional 이벤트. 기본 켬(설계서 D7)
+        self.event_e4_enabled = g("EVENT_E4_ENABLED", "true").lower() != "false"
 
     @property
     def psycopg_dsn(self) -> str:
@@ -67,9 +69,11 @@ def settings() -> Settings:
     return Settings()
 
 
-SCENARIO_ID = "moarun-rejoin-v1"
+# DB·데이터 폴더 ID(fitmoa-invite-v1) ↔ 시나리오 JSON의 scenario_id(sc-a, doc://sc-a/...) 매핑
+SCENARIO_ID = "fitmoa-invite-v1"
+SCENARIO_KEY = "sc-a"
+SCENARIO_ALIASES = {SCENARIO_ID: SCENARIO_ID, SCENARIO_KEY: SCENARIO_ID}
 SCENARIO_VERSION = 1
-POLICY_VERSION = "exam-v1"
-DATASET_VERSION = "rejoin-data-v1"
-SECTION_IDS = ["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"]
-EXAM_MINUTES = 120
+POLICY_VERSION = "sc-a-v0.1"
+PUBLIC_DOCUMENT_IDS = ["brief", "reward-table", "faq-draft", "tone-guide"]
+CRITERIA_DOCUMENT_ID = "criteria"

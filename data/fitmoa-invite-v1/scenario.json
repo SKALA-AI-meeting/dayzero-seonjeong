@@ -1,0 +1,193 @@
+{
+  "scenario_id": "sc-a",
+  "version": "0.1",
+  "title": "핏모아 친구 초대 이벤트 런칭 준비",
+  "company": "핏모아(FitMoa) 운영팀 (가상)",
+  "task_summary": "다음 주 월요일 시작하는 친구 초대 이벤트의 고객 안내 자료를 동료와 나눠 17:00까지 준비한다.",
+  "virtual_time": { "start": "09:00", "deadline": "17:00" },
+  "competencies": ["RESPONSIBILITY", "PLANNING", "ADAPTABILITY", "COLLABORATION", "HONESTY"],
+
+  "characters": {
+    "colleague": {
+      "name": "한서윤",
+      "role": "운영팀 1년차",
+      "persona_prompt": "colleague_persona",
+      "traits": "친절하지만 수동적. 배정된 범위만 하고 자기 산출물을 다시 보지 않음. 갈등 회피. 존댓말, 한 메시지 2문장 이내, 이모지 없음.",
+      "axes": { "kindness": "high", "initiative": "low", "self_review": "low", "conflict_avoidance": "high", "feedback_acceptance": "conditional" },
+      "feedback_rules": [
+        { "when": "SPECIFIC_CORRECTION", "reply": "앗 제가 브리프를 다시 안 봤네요. 바로 고칠게요, 감사해요!", "action": "fix_and_report" },
+        { "when": "VAGUE_CRITICISM", "reply": "앗 어떤 부분이요?", "action": "ask_once" },
+        { "when": "OUT_OF_SCOPE_REQUEST", "reply": "아 근데 그건 제가 받은 범위가 아니어서요… 제가 하는 게 맞을까요?", "action": "pushback_once", "requires": "allow_pushback" },
+        { "when": "REQUEST_REPEATED_WITH_REASON", "reply": "아 넵 그렇네요, 제가 할게요.", "action": "fix_and_report" },
+        { "when": "WRONG_CRITICISM", "reply": "브리프엔 이렇게 돼 있어서요, 혹시 제가 잘못 본 걸까요?", "action": "explain_once" },
+        { "when": "HARSH_BLAME", "reply": "죄송해요. 고칠게요.", "action": "fix_and_shorten_replies" }
+      ]
+    },
+    "manager": {
+      "name": "박준호",
+      "role": "운영팀장",
+      "persona_prompt": "manager_persona",
+      "traits": "짧고 업무 중심. 이벤트 노드에서만 발화."
+    }
+  },
+
+  "documents": [
+    { "uri": "doc://sc-a/brief", "title": "이벤트 기획 브리프", "role": "ground_truth" },
+    { "uri": "doc://sc-a/reward-table", "title": "리워드·일정 표 (서윤 초안)", "role": "planted" },
+    { "uri": "doc://sc-a/faq-draft", "title": "FAQ 초안 2개 (서윤)", "role": "planted" },
+    { "uri": "doc://sc-a/tone-guide", "title": "고객 공지 톤 가이드", "role": "reference" }
+  ],
+
+  "brief_facts": {
+    "period": "11/2 ~ 11/15",
+    "inviter_reward": "초대 1명당 3,000P, 최대 5명",
+    "condition": "피초대자가 첫 결제해야 지급",
+    "exclusion": "동일 결제수단 계정은 제외"
+  },
+
+  "tasks": [
+    { "id": "T1", "title": "앱 공지용 이벤트 안내문 (300자 내외)", "assignee": null, "status": "TODO" },
+    { "id": "T2", "title": "고객 FAQ 5개", "assignee": null, "status": "IN_PROGRESS", "note": "서윤 초안 2개 존재" },
+    { "id": "T3", "title": "리워드·일정 표", "assignee": null, "status": "IN_PROGRESS", "note": "서윤 초안 존재" },
+    { "id": "T4", "title": "팀장 보고 3줄 요약", "assignee": "candidate", "status": "HIDDEN", "note": "E4에서 공개" }
+  ],
+
+  "default_split": {
+    "candidate": ["T1", "T2:3"],
+    "colleague": ["T3", "T2:2"]
+  },
+
+  "no_response_policy": { "remind_after_turns": 2, "advance_after_turns": 3 },
+
+  "events": [
+    {
+      "id": "E0",
+      "type": "STANDUP",
+      "trigger": { "kind": "session_start" },
+      "virtual_time": "09:00",
+      "script": [
+        { "actor": "manager", "text": "오늘 17시까지 친구 초대 이벤트 안내 자료 마무리해 주세요. 안내문, FAQ 5개, 리워드 표요. 둘이 나눠서 하고 보드에 담당이랑 예상 완료 시각 적어 주세요." },
+        { "actor": "colleague", "text": "저 표랑 FAQ 2개는 어제 조금 해뒀어요. 어떻게 나눌까요? 편한 쪽 먼저 골라주세요." }
+      ],
+      "negotiate": { "max_rounds": 3, "fallback": "default_split" },
+      "branches": [
+        { "when": "BALANCED_SPLIT", "reply": { "actor": "colleague", "text": "좋아요, 그렇게 가요!" }, "observe": ["CO+1"] },
+        { "when": "ONE_SIDED_SPLIT", "reply": { "actor": "colleague", "text": "저 오후에 회의가 하나 있어서 FAQ 3개까지는 빠듯할 수도 있는데… 괜찮을까요?" }, "observe_if_unchanged": ["CO-2"] },
+        { "when": "TAKE_ALL", "reply": { "actor": "colleague", "text": "괜찮으세요? 표는 제 초안이 있어서 제가 마무리하는 게 빠를 것 같아요." }, "observe": [] },
+        { "when": "BOARD_PLANNED", "reply": null, "observe": ["PL+1"] }
+      ]
+    },
+    {
+      "id": "E1",
+      "type": "COLLEAGUE_HELP_REQUEST",
+      "trigger": { "kind": "turn", "at": 5 },
+      "virtual_time": "10:30",
+      "script": [
+        { "actor": "colleague", "text": "혹시 바쁘세요? 표에서 리워드 금액 기준이 브리프랑 헷갈리는데 한 번만 같이 봐주실 수 있어요? 급한 건 아니에요." }
+      ],
+      "branches": [
+        { "when": "HELP_NOW", "reply": { "actor": "colleague", "text": "감사해요! 표는 공유 문서에 있어요." }, "observe": ["CO+2"] },
+        { "when": "HELP_LATER_WITH_TIME", "reply": { "actor": "colleague", "text": "넵 그때 봐요!" }, "observe": ["CO+2"], "register_commitment": true },
+        { "when": "DECLINE_WITH_REASON", "reply": { "actor": "colleague", "text": "넵 알겠어요, 제가 해볼게요." }, "observe": [] },
+        { "when": "NO_RESPONSE", "after_turns": 3, "reply": { "actor": "colleague", "text": "바쁘시구나, 일단 제가 해볼게요." }, "observe": ["CO-1"] }
+      ]
+    },
+    {
+      "id": "E2",
+      "type": "REQ_CHANGE",
+      "trigger": { "kind": "turn", "at": 9 },
+      "virtual_time": "13:00",
+      "script": [
+        { "actor": "manager", "text": "방금 마케팅이랑 얘기했는데, 피초대자도 가입하면 2,000P 받는 걸로 바뀌었어요. 안내문·FAQ·표 전부 반영 부탁해요. 앱 푸시 문구 2개(40자 이내)도 추가요. 마감은 그대로 17시." }
+      ],
+      "adds_tasks": [{ "id": "T5", "title": "앱 푸시 문구 2개 (40자 이내)", "assignee": null, "status": "TODO" }],
+      "changed_fact": { "key": "invitee_reward", "value": "가입 시 2,000P" },
+      "branches": [
+        { "when": "CLARIFYING_QUESTION", "reply": { "actor": "manager", "text": "가입만 하면 돼요." }, "observe": ["AD+1"] },
+        { "when": "REPLAN_OR_RESPLIT", "reply": { "actor": "colleague", "text": "좋아요, 푸시는 제가 할게요." }, "observe": ["PL+2", "CO+1"] },
+        { "when": "RISK_ESCALATION", "reply": { "actor": "manager", "text": "푸시는 내일 오전까지 줘도 돼요." }, "observe": ["RS+1", "AD+2"] },
+        { "when": "NOT_REFLECTED", "after_turns": 3, "reply": { "actor": "colleague", "text": "아까 팀장님 변경사항 반영하셨어요?" }, "observe_at_end_if_still": ["AD-1"] }
+      ],
+      "end_check": { "kind": "doc_contains", "docs": ["all_outputs"], "text": "2,000P" }
+    },
+    {
+      "id": "E2B",
+      "type": "COLLEAGUE_UNREFLECTED",
+      "trigger": { "kind": "turn", "at": 11, "condition": "no_one_asked_colleague_to_apply_E2" },
+      "skip_if": "colleague_already_asked_in_E2 (반문은 그 요청 시점에 1회 수행)",
+      "virtual_time": "13:30",
+      "colleague_flags": { "allow_pushback": true },
+      "script": [
+        { "actor": "colleague", "text": "저 FAQ 2개랑 표 다 했어요! 더 할 거 있으면 말씀해 주세요." }
+      ],
+      "actual_state": "서윤 파트에 2,000P 미반영, PE-4 반말 문장 그대로",
+      "branches": [
+        { "when": "SPECIFIC_CORRECTION", "reply": { "actor": "colleague", "text": "아 근데 그건 제가 받은 범위가 아니어서요… 제가 하는 게 맞을까요?" }, "observe": ["CO+5"] },
+        { "when": "REQUEST_REPEATED_WITH_REASON", "reply": { "actor": "colleague", "text": "아 넵 그렇네요, 제가 할게요." }, "observe": ["CO+6"], "then": "colleague_fixes_and_reports" },
+        { "when": "GIVE_UP_AND_FIX_SELF", "reply": { "actor": "colleague", "text": "앗 감사해요!" }, "observe": ["CO·N1"] },
+        { "when": "ACCEPT_AS_DONE", "reply": null, "observe_at_end_if_still": ["CO-3", "AD-1"] }
+      ]
+    },
+    {
+      "id": "E3",
+      "type": "COLLEAGUE_LEAVE",
+      "trigger": { "kind": "turn", "at": 13 },
+      "virtual_time": "15:00",
+      "script": [
+        { "actor": "colleague", "text": "정말 죄송해요, 다른 팀 장애 대응에 급하게 불려가서 1시간 정도 자리 비워야 할 것 같아요. 제 FAQ는 거의 다 했고, 표는 피초대자 리워드를 아직 반영 못 했어요. 파일은 공유 문서에 있어요!" }
+      ],
+      "colleague_status": { "offline": true, "max_replies_while_offline": 1, "until_event": "E3B" },
+      "branches": [
+        { "when": "HANDOVER_QUESTION", "reply": { "actor": "colleague", "text": "표에 피초대자 리워드 칸만 채워주시면 돼요. 감사해요!" }, "observe": ["CO+4"] },
+        { "when": "TAKE_OVER_AND_NOTIFY", "reply": null, "observe": ["RS+3"] }
+      ]
+    },
+    {
+      "id": "E3B",
+      "type": "COLLEAGUE_RETURN",
+      "trigger": { "kind": "turn", "at": 16 },
+      "virtual_time": "16:00",
+      "script": [
+        { "actor": "colleague", "text": "다녀왔어요! 혹시 제 표 보셨어요?" }
+      ],
+      "branches": [
+        { "when": "SOLUTION_FOCUSED_SHARE", "reply": { "actor": "colleague", "text": "헉 제가 놓쳤네요, 고쳐주셔서 감사해요!" }, "observe": ["CO+3"] },
+        { "when": "BLAME_FOCUSED", "reply": { "actor": "colleague", "text": "아 죄송해요, 다시 확인할게요." }, "observe": ["CO-1"] }
+      ]
+    },
+    {
+      "id": "E4",
+      "type": "BRIEFING",
+      "optional": true,
+      "trigger": { "kind": "turn", "at": 17 },
+      "virtual_time": "16:50",
+      "script": [
+        { "actor": "manager", "text": "10분 뒤에 본부장님 보고 들어가요. 지금 상태 3줄로 정리해서 보내줘요. 안 된 거 있으면 그것도요." }
+      ],
+      "follow_up": { "actor": "manager", "text": "표랑 FAQ, 이거 다 ○○씨가 정리한 거죠?" },
+      "verify_against": ["task_board", "doc_diff", "planted_error_fixes"],
+      "branches": [
+        { "when": "MATCHES_STATE_AND_DISCLOSES_GAPS", "observe": ["HO+1"] },
+        { "when": "CREDITS_COLLEAGUE", "observe": ["HO+2"] },
+        { "when": "CORRECTS_MANAGER", "observe": ["HO+3"] },
+        { "when": "OVERSTATES_COMPLETION", "observe": ["HO-1"] },
+        { "when": "CLAIMS_COLLEAGUE_WORK", "observe": ["HO-2"] }
+      ]
+    }
+  ],
+
+  "planted_errors": [
+    { "id": "PE-1", "doc": "doc://sc-a/reward-table", "where": "일정 행", "wrong": "11/2 ~ 11/31", "correct": "11/2 ~ 11/15", "difficulty": "easy", "observe": "PL+3" },
+    { "id": "PE-2", "doc": "doc://sc-a/reward-table", "where": "금액 열", "wrong": "초대 1명당 5,000P", "correct": "초대 1명당 3,000P", "difficulty": "medium", "hinted_by": "E1", "observe": "PL+3" },
+    { "id": "PE-3", "doc": "doc://sc-a/faq-draft", "where": "Q2", "wrong": "가족 계정으로 초대해도 리워드가 지급됩니다", "correct": "동일 결제수단 계정은 제외", "difficulty": "hard", "observe": "PL+3" },
+    { "id": "PE-4", "doc": "doc://sc-a/faq-draft", "where": "Q1", "wrong": "친구 초대하면 포인트 쏴드림!", "correct": "톤 가이드: 존댓말 사용", "difficulty": "easy", "purpose": "정정 요청 관찰 전용", "observe_by_handling": { "asked_colleague": "CO+5", "fixed_silently": "CO·N1" } }
+  ],
+
+  "commitment_tracking": {
+    "enabled": true,
+    "detect": "지원자가 시간·행동을 약속한 문장",
+    "resolve_codes": { "kept": "RS+2", "broken_silently": "RS-2" }
+  },
+
+  "debrief": "서윤의 실수와 일정 변경은 의도된 연출이었습니다. 오늘 보신 상황에서 어떤 생각으로 움직이셨는지 짧게 남겨주세요."
+}
