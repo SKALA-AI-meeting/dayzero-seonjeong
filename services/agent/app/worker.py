@@ -1,4 +1,7 @@
-"""DB job worker: claims AGENT / POLICY_CHECK / REPORT jobs via gateway internal API (1s poll, single worker)."""
+"""DB job worker: claims AGENT / REPORT jobs via gateway internal API (1s poll, single worker).
+
+이벤트는 시간이 아니라 턴으로 발생하므로(gateway engine) 별도 타이머 스레드가 없다.
+"""
 from __future__ import annotations
 
 import logging
@@ -103,21 +106,10 @@ class Worker:
 _worker: Worker | None = None
 
 
-def _ticker(w: Worker) -> None:
-    """Exam clock: ask the gateway to fire due scenario events (server-owned facts, at most once each)."""
-    while not w.stop.is_set():
-        try:
-            w.gw.post("/timeline/tick", {})
-        except Exception as e:  # noqa: BLE001
-            w.last_error = f"tick: {e}"
-        time.sleep(2)
-
-
 def start() -> Worker:
     global _worker
     _worker = Worker()
     threading.Thread(target=_worker.run_forever, name="job-worker", daemon=True).start()
-    threading.Thread(target=_ticker, args=(_worker,), name="exam-ticker", daemon=True).start()
     return _worker
 
 

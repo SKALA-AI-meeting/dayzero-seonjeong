@@ -34,3 +34,5 @@ def capability_from(ctx: Any) -> str:
 
 READ = t.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 WRITE = t.ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False, open_world_hint=False)
+# 관찰 기록: 쓰기지만 업무 산출물을 바꾸지 않고 같은 코드는 1회만 기록(승인 불필요)
+LOG = t.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False)

@@ -12,11 +12,11 @@ import httpx2
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
-from shared.config import SCENARIO_ID, settings
+from shared.config import SCENARIO_KEY, settings
 
 S = settings()
 SVC = {"x-service-token": S.internal_service_secret}
-RAG_TOOLS = {"search_docs"}
+RAG_TOOLS = {"search_docs", "search_criteria"}
 
 
 class Gateway:
@@ -73,6 +73,12 @@ async def _list(url: str, cap: str) -> list:
         return (await c.list_tools()).tools
 
 
+async def _prompt(url: str, cap: str, name: str, args: dict) -> str:
+    async with Client(streamable_http_client(url, http_client=httpx2.AsyncClient(headers={"x-capability": cap}, timeout=30))) as c:
+        pr = await c.get_prompt(name, args)
+        return "\n".join(m.content.text for m in pr.messages if getattr(m.content, "text", None))
+
+
 async def _read(url: str, cap: str, uri: str) -> str:
     async with Client(streamable_http_client(url, http_client=httpx2.AsyncClient(headers={"x-capability": cap}, timeout=30))) as c:
         rr = await c.read_resource(uri)
@@ -94,17 +100,24 @@ def call_tool(gw: Gateway, run_id: str, tool: str, args: dict, approval_id: str 
     return out, int((time.monotonic() - t0) * 1000)
 
 
-def list_read_tools(gw: Gateway, run_id: str) -> list:
-    """tools/list on both servers, keeping read-only tools (annotations) for model binding."""
+def list_read_tools(gw: Gateway, run_id: str, allow: set[str]) -> list:
+    """tools/list on both servers, keeping read-only tools (annotations) in the allowlist for model binding.
+    get_planted_error·search_criteria는 판정 전용이라 모델에 바인딩하지 않는다."""
     tools = []
     for url, aud in ((S.business_mcp_url, "business-mcp"), (S.rag_mcp_url, "rag-mcp")):
         cap = gw.capability(run_id, aud)
         for t in asyncio.run(_list(url, cap)):
-            if t.annotations and t.annotations.read_only_hint and t.name != "get_session_context":
+            if t.annotations and t.annotations.read_only_hint and t.name in allow:
                 tools.append(t)
     return tools
 
 
 def read_resource(gw: Gateway, run_id: str, document_id: str) -> str:
     cap = gw.capability(run_id, "rag-mcp")
-    return asyncio.run(_read(S.rag_mcp_url, cap, f"doc://{SCENARIO_ID}/{document_id}"))
+    return asyncio.run(_read(S.rag_mcp_url, cap, f"doc://{SCENARIO_KEY}/{document_id}"))
+
+
+def get_prompt(gw: Gateway, run_id: str, name: str, args: dict) -> str:
+    """rag-mcp Prompt(colleague_persona / manager_persona)를 MCP prompts/get으로 받는다."""
+    cap = gw.capability(run_id, "rag-mcp")
+    return asyncio.run(_prompt(S.rag_mcp_url, cap, name, {k: str(v) for k, v in args.items()}))

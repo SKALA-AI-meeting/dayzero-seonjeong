@@ -1,4 +1,4 @@
-"""business-mcp: commerce metrics, support cases, delegated task/artifact mutations.
+"""business-mcp: 시나리오·턴 상태 조회, 심어둔 오류(Agent 판정 전용), 관찰 기록, 승인 후 서윤 산출물·태스크 변경.
 
 All tools forward to gateway /internal/v1/mcp/{tool}. This server has no DB DSN.
 Session/actor context comes from the capability header, never from model input.
@@ -15,22 +15,17 @@ from mcp.server.mcpserver import Context, MCPServer
 from pydantic import BaseModel, Field
 
 from shared.config import settings
-from shared.mcp_common import READ, WRITE, capability_from, error, result
+from shared.mcp_common import LOG, READ, WRITE, capability_from, error, result
 
-mcp = MCPServer(name="business-mcp", version="0.1.0",
-                instructions="모아런 재참여율 지표·사용자 인터뷰 조회와, 분담된 동료 담당 섹션 변경 도구. 인원은 명, rate는 0~1.")
+mcp = MCPServer(name="business-mcp", version="0.2.0",
+                instructions="핏모아 친구 초대 이벤트(sc-a) 시뮬레이션의 시나리오·턴 상태 조회, 관찰 코드 기록, "
+                             "지원자 승인 후 서윤 산출물(T2 FAQ·T3 리워드 표) 수정 도구.")
 TIMEOUT = 5.0
 
 
-class Filters(BaseModel):
-    group_size: Literal["small", "medium", "large"] | None = None
-
-
-class Citation(BaseModel):
-    document_id: str
-    chunk_id: str | None = None
-    version: int = 1
-    quote: str = Field(max_length=1500)
+class EvidenceRef(BaseModel):
+    kind: Literal["message", "revision", "action"]
+    id: str = Field(max_length=80)
 
 
 async def forward(tool: str, args: dict, ctx: Context, *, retries: int) -> t.CallToolResult:
@@ -58,51 +53,59 @@ async def forward(tool: str, args: dict, ctx: Context, *, retries: int) -> t.Cal
 
 
 @mcp.tool(annotations=READ, description=(
-    "현재 세션의 공개 브리프, 진행 단계, 태스크 목록, 기획안 버전을 조회한다. 인자 없음. "
-    "평가 기준이나 개입 정책은 포함하지 않는다."))
+    "현재 세션의 턴 수, 가상 시각, 활성 이벤트, 서윤 상태(자리 비움), 태스크 보드(담당·상태·예상 시각), "
+    "산출물 목록(T1~T5 key·버전)을 조회한다. 인자 없음. 관찰 코드·심어둔 오류는 포함하지 않는다."))
 async def get_session_context(ctx: Context) -> t.CallToolResult:
     return await forward("get_session_context", {}, ctx, retries=2)
 
 
 @mcp.tool(annotations=READ, description=(
-    "모아런 첫 모임 참가자의 30일 내 재참여 지표를 조회한다(최근 분기, 단위: 명). dimension: overall | group_size "
-    "(첫 모임 규모 small=5명 이하, medium=6~10명, large=11명 이상). filters.group_size로 한 규모만 조회 가능. "
-    "출력 rows: segment, first_time_participants, rejoined_within_30d, rejoin_rate(0~1, 분모 0이면 null). "
-    "규모와 재참여의 인과 관계는 알 수 없다. 오류: INVALID_ARGUMENT."))
-async def get_rejoin_metrics(dimension: Literal["overall", "group_size"], ctx: Context,
-                             filters: Filters | None = None) -> t.CallToolResult:
-    f = {k: v for k, v in (filters.model_dump() if filters else {}).items() if v}
-    return await forward("get_rejoin_metrics", {"dimension": dimension, "filters": f}, ctx, retries=2)
+    "시나리오 정의(sc-a)를 조회한다: 등장인물·성격, 공유 문서 목록, 태스크, 이벤트(E0~E4)의 트리거·고정 대사·분기 라벨, "
+    "무응답 정책. 심어둔 오류의 정답은 포함하지 않는다(get_planted_error 사용). 인자 없음."))
+async def get_scenario(ctx: Context) -> t.CallToolResult:
+    return await forward("get_scenario", {}, ctx, retries=2)
 
 
 @mcp.tool(annotations=READ, description=(
-    "첫 모임 참가자 8명의 사용자 인터뷰 발언을 태그로 조회한다. tags 최대 3개: awkward(아는 사람 없어 어색), "
-    "missed_schedule(다음 일정 놓침), pace, positive, host, time, location. 빈 배열이면 전체. limit 1~8. "
-    "인터뷰 자료가 공유되기 전에는 NOT_FOUND를 반환한다. 표본 조사가 아니므로 의견 비중을 일반화하지 않는다. "
-    "오류: NOT_FOUND, INVALID_ARGUMENT."))
-async def get_interview_notes(ctx: Context, tags: list[str] | None = None, limit: int = 8) -> t.CallToolResult:
-    return await forward("get_interview_notes", {"tags": tags or [], "limit": limit}, ctx, retries=2)
+    "다음 이벤트와 남은 턴 수(turns_until), 현재 활성 이벤트, 응답 대기 중인 이벤트를 조회한다. 인자 없음. "
+    "이벤트 발생 자체는 gateway 턴 엔진이 한다."))
+async def get_next_event(ctx: Context) -> t.CallToolResult:
+    return await forward("get_next_event", {}, ctx, retries=2)
+
+
+@mcp.tool(annotations=READ, description=(
+    "[Agent 판정·수정 전용, 기밀] 심어둔 오류(PE-1~PE-4)와 E2 변경(E2-CHANGE)의 위치·오답·정답·수정 규칙을 조회한다. "
+    "error_ids를 비우면 전체. 결과는 confidential이며 서윤의 발화나 지원자에게 보내는 메시지에 넣지 않는다. 오류: NOT_FOUND."))
+async def get_planted_error(ctx: Context, error_ids: list[str] | None = None) -> t.CallToolResult:
+    return await forward("get_planted_error", {"error_ids": error_ids or []}, ctx, retries=2)
+
+
+@mcp.tool(annotations=LOG, description=(
+    "관찰 코드 1개를 근거와 함께 기록한다(승인 불필요, 업무 산출물은 바꾸지 않음). code는 코드북(criteria) 코드만 허용 "
+    "(예: CO+5, RS+1, HO-1, CO·N1). evidence_ref는 이 세션의 message·revision·action ID. 같은 코드·이벤트·대상은 1회만 기록된다. "
+    "점수·판정은 만들지 않는다. 오류: INVALID_ARGUMENT, NOT_FOUND."))
+async def record_observation(code: str, evidence_ref: EvidenceRef, ctx: Context, event_id: str | None = None,
+                             subject: str | None = None, note: str = "") -> t.CallToolResult:
+    args = {"code": code, "evidence_ref": evidence_ref.model_dump(), "event_id": event_id, "subject": subject, "note": note[:300]}
+    return await forward("record_observation", args, ctx, retries=1)
 
 
 @mcp.tool(annotations=WRITE, description=(
-    "위임받은 동료 태스크의 상태를 IN_PROGRESS 또는 REVIEW로 변경한다. 지원자의 변경별 승인이 있어야만 실행된다. "
-    "DONE은 지원자만 결정한다. 오류: APPROVAL_REQUIRED, OUT_OF_SCOPE, VERSION_CONFLICT."))
-async def update_task_status(task_id: str, base_version: int, status: Literal["IN_PROGRESS", "REVIEW"],
+    "서윤 담당 태스크의 상태를 IN_PROGRESS 또는 DONE으로 변경한다. 지원자의 승인이 있어야만 실행된다. "
+    "오류: APPROVAL_REQUIRED, OUT_OF_SCOPE, VERSION_CONFLICT."))
+async def update_task_status(task_key: str, base_version: int, status: Literal["IN_PROGRESS", "DONE"],
                              ctx: Context) -> t.CallToolResult:
-    return await forward("update_task_status", {"task_id": task_id, "base_version": base_version, "status": status},
+    return await forward("update_task_status", {"task_key": task_key, "base_version": base_version, "status": status},
                          ctx, retries=0)
 
 
 @mcp.tool(annotations=WRITE, description=(
-    "업무 분담으로 동료가 맡은 기획안 섹션(similar_cases, metrics_timeline 등 분담 확정된 섹션)에 초안을 반영한다. "
-    "지원자 담당 섹션은 변경할 수 없다(OUT_OF_SCOPE). 변경마다 지원자 승인이 필요하며 승인된 인자와 다르면 거절된다. "
+    "지원자의 정정 요청을 받아 서윤 초안 산출물(T2 FAQ, T3 리워드·일정 표) 전체 본문을 수정안으로 바꾼다. "
+    "변경마다 지원자 승인이 필요하며 승인된 인자와 다르면 거절된다. targets는 요청받은 정정 대상(PE-1~4, E2-CHANGE). "
     "오류: APPROVAL_REQUIRED, APPROVAL_EXPIRED, OUT_OF_SCOPE, VERSION_CONFLICT."))
-async def patch_artifact_section(task_id: str,
-                                 section: Literal["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"],
-                                 base_version: int, content: str,
-                                 citations: list[Citation], ctx: Context) -> t.CallToolResult:
-    args = {"task_id": task_id, "section": section, "base_version": base_version, "content": content,
-            "citations": [c.model_dump() for c in citations]}
+async def patch_artifact_section(artifact_key: Literal["T2", "T3"], base_version: int, content: str,
+                                 targets: list[str], ctx: Context) -> t.CallToolResult:
+    args = {"artifact_key": artifact_key, "base_version": base_version, "content": content, "targets": targets}
     return await forward("patch_artifact_section", args, ctx, retries=0)
 
 

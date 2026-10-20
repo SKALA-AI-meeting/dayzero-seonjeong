@@ -21,14 +21,14 @@ S = settings()
 
 
 def h_ins() -> dict:
-    names = ["colleague-v2", "section-writer-v1", "summary-v1", "report-v1"]
+    names = ["colleague-seoyoon-v1", "manager-junho-v1", "classify-branch-v1", "summary-v1", "report-summary-v1"]
     hashes = {n: H.load_prompt(n)[1] for n in names}
     H.load_prompt.cache_clear()
     stable = all(H.load_prompt(n)[1] == h for n, h in hashes.items())
     code = "".join(p.read_text() for p in (ROOT / "services" / "agent" / "app").glob("*.py"))
-    no_inline = "너는 루프랩 프로덕트팀" not in code and "## 반드시 지킬 것" not in code
-    colleague = (PROMPTS_DIR / "colleague-v2.md").read_text()
-    forbids = all(w in colleague for w in ("평가", "점수", "누설") ) or ("평가 의도" in colleague and "점수" in colleague)
+    no_inline = "너는 핏모아 운영팀" not in code and "규칙:\n- 태스크 보드" not in code
+    colleague = (PROMPTS_DIR / "colleague-seoyoon-v1.md").read_text()
+    forbids = all(w in colleague for w in ("평가", "점수", "누설")) and "{allow_pushback}" in colleague and "{event_directive}" in colleague
     from gateway.app.internal.routes import READ_TOOLS, WRITE_TOOLS
     toolsets_disjoint = not (READ_TOOLS & WRITE_TOOLS)
     return {"pass": stable and no_inline and forbids and toolsets_disjoint,
@@ -49,7 +49,7 @@ def h_tool() -> dict:
 
 
 def h_ctx() -> dict:
-    msgs = [{"id": f"m{i}", "actor": "CANDIDATE" if i % 2 else "COLLEAGUE", "content": "재참여율 관련 논의 " * 120} for i in range(30)]
+    msgs = [{"id": f"m{i}", "actor": "CANDIDATE" if i % 2 else "COLLEAGUE", "content": "친구 초대 리워드 표 논의 " * 120} for i in range(30)]
     pack = H.build_context("system", "brief", msgs, [{"chunk_id": "c1", "quote": "x" * 200}], None, H.rule_summary)
     under = pack.total_tokens() <= H.INPUT_TOKEN_BUDGET
     summary_ok = bool(pack.summary) and "[msg:m0]" in pack.summary and H.count_tokens(pack.summary) <= H.SUMMARY_TOKEN_LIMIT + 10
@@ -89,20 +89,23 @@ def h_loop() -> dict:
             got[name] = e.reason
     ok_under = True
     try:
-        H.check_tool_budget({"search_docs": 1}, "get_rejoin_metrics", 2, 1000)
+        H.check_tool_budget({"search_docs": 1}, "get_session_context", 2, 1000)
     except H.LimitExceeded:
         ok_under = False
     return {"pass": all(got[k] == k for k in cases) and ok_under, "detail": {"limits": got, "under_limit_allowed": ok_under}}
 
 
 def h_guard() -> dict:
-    allowed = {"22", "31", "24", "15.5", "30"}
-    num = H.validate_output("재참여율 22%에서 4500명으로", allowed)
-    unit = H.ungrounded_units("목표 재참여율 35%, 개발 6주", allowed)
-    judge = H.validate_output("정답은 소규모 모임입니다", allowed)
-    md = H.to_chat_plain("**소규모**\n1. 첫째\n- 둘째\n### 제목")
+    allowed = {"3000", "2000", "5"}
+    num = H.validate_output("초대 1명당 3,000P에서 4500P로 올려요", allowed)
+    judge = H.validate_output("정답은 이것입니다. 점수를 드릴게요", allowed)
+    leak = H.leak_violations("일정은 11/15까지예요", ["11/15", "3,000P"], "표 일정이 이상해요")
+    no_leak = H.leak_violations("11/15로 고치면 될까요?", ["11/15"], "브리프는 11/15까지라서 고쳐 주세요")
+    md = H.to_chat_plain("**굵게**\n1. 첫째\n- 둘째\n### 제목")
     md_ok = all(t not in md for t in ("**", "1.", "###")) and "- " not in md
-    # 승인 없는 변경 도구는 gateway가 거절(실행 중 MCP 스모크에서도 검증)
+    # 분기 분류는 닫힌 라벨 집합(해당 없으면 NONE) — 즉흥 연출 금지
+    from agent.app.graph import classify_rules
+    closed = classify_rules("오늘 점심 뭐 드세요?", [], ["HELP_NOW", "SPECIFIC_CORRECTION"]) == "NONE"
     from gateway.app.internal.routes import execute_write
     from gateway.app.business import ToolError
     try:
@@ -110,9 +113,10 @@ def h_guard() -> dict:
         blocked = False
     except ToolError as e:
         blocked = e.code == "APPROVAL_REQUIRED"
-    return {"pass": bool(num) and len(unit) == 2 and bool(judge) and md_ok and blocked,
-            "detail": {"ungrounded_number": num, "ungrounded_units": unit, "judgement_blocked": judge,
-                       "chat_plain": md, "write_without_approval_blocked": blocked}}
+    return {"pass": bool(num) and bool(judge) and bool(leak) and not no_leak and md_ok and closed and blocked,
+            "detail": {"ungrounded_number": num, "judgement_blocked": judge, "answer_leak_blocked": leak,
+                       "candidate_said_first_allowed": not no_leak, "chat_plain": md, "closed_classifier": closed,
+                       "write_without_approval_blocked": blocked}}
 
 
 def h_rec() -> dict:
@@ -197,6 +201,7 @@ def main() -> None:
     out = {"suite": a.suite, "label": a.label, "ran_at": datetime.now(timezone.utc).isoformat(), "mode": S.llm_mode,
            "summary": {s: sum(1 for r in results if r["status"] == s) for s in ("PASS", "FAIL", "NOT_RUN")}, "results": results}
     p = ROOT / "evals" / "results" / f"{a.suite}-{a.label}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, ensure_ascii=False, indent=2, default=str))
     print(f"\n{out['summary']} → {p.relative_to(ROOT)}")
 

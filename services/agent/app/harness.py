@@ -27,7 +27,7 @@ MAX_SAME_TOOL = 3
 ACTIVE_BUDGET_MS = 120_000
 RETRY_DELAYS = (1.0, 2.0)  # 최초 + 2회 재시도
 RETRYABLE = ("429", "503", "timeout", "rate limit", "overloaded", "temporarily")
-SAFE_FALLBACK = "어떤 자료를 기준으로 볼지 정해 주시면 확인해 볼게요. 예: 지표 현황(모임 규모별 재참여율), 운영 정책, 회의록, 사용자 인터뷰(공유 후)."
+SAFE_FALLBACK = "앗 어떤 부분이요?"  # 검증 실패 시 서윤 고정 대사(feedback_rules VAGUE_CRITICISM)로 대체
 
 
 # ---- Instructions -----------------------------------------------------------
@@ -159,6 +159,13 @@ def validate_output(text: str, allowed_numbers: set[str]) -> list[str]:
         if norm not in allowed_numbers:
             problems.append(f"ungrounded_number:{n}")
     return problems
+
+
+def leak_violations(text: str, secrets: list[str], candidate_text: str) -> list[str]:
+    """정답 누설 가드: 심어둔 오류의 정답 값(get_planted_error, Agent 전용)이 서윤·팀장 발화에 나오면 위반.
+    지원자가 먼저 말한 값은 되풀이해도 누설이 아니다."""
+    norm = lambda x: re.sub(r"\s+", "", x)
+    return [f"leak:{t}" for t in secrets if t and norm(t) in norm(text) and norm(t) not in norm(candidate_text)]
 
 
 UNIT_NUMBER = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(%|퍼센트|주|개월|달|일|명|회|배)")
