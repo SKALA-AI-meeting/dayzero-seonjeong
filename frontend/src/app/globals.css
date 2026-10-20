@@ -112,6 +112,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .modal-foot { padding: 16px 24px 20px; border-top: 1px solid var(--color-border); display: flex; gap: var(--space-2); justify-content: flex-end; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; background: var(--color-surface); border-left: 1px solid var(--color-border); box-shadow: var(--shadow-md); z-index: 70; display: flex; flex-direction: column; width: var(--doc-drawer-width); max-width: 100vw; }
 .drawer.assistant { width: var(--assistant-drawer-width); }
+/* 참조용 자료 패널: 작업 패널(기획안·태스크·어시스턴트)을 가리지 않도록 그 왼쪽에 열림 */
+.drawer.side { top: var(--topbar-height); right: min(var(--work-panel-width), 33.4vw); width: min(var(--doc-drawer-width), 40vw); z-index: 30; box-shadow: var(--shadow-sm); }
+.work-body.assistant-body { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .drawer-head { height: 60px; padding: 0 12px 0 20px; border-bottom: 1px solid var(--color-border); display: flex; align-items: center; gap: var(--space-2); flex: none; }
 .drawer-body { padding: 20px; overflow: auto; flex: 1; }
 
@@ -225,6 +228,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .work.pane { position: fixed; top: var(--topbar-height); right: 0; bottom: 0; width: min(480px, 100vw); z-index: 70; box-shadow: var(--shadow-md); border-left: 1px solid var(--color-border); display: none; }
   .work.pane.open { display: flex; }
   .mobile-switch { display: inline-flex; }
+  .drawer.side { right: 0; width: min(520px, 100vw); z-index: 75; }
 }
 @media (max-width: 1023px) {
   .ws-main { grid-template-columns: minmax(0, 1fr); }

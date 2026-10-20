@@ -49,17 +49,24 @@ export function Modal({ open, title, description, size = "md", onClose, footer, 
   );
 }
 
-/** Drawer (§4.10, §4.11): 우측 overlay, Escape로 닫기. */
-export function Drawer({ open, title, badge, kind = "doc", onClose, children, footer }: {
-  open: boolean; title: string; badge?: React.ReactNode; kind?: "doc" | "assistant";
-  onClose: () => void; children: React.ReactNode; footer?: React.ReactNode;
+/** Drawer (§4.10): 기본은 modal overlay. modal=false면 배경을 막지 않는 참조 패널(다른 영역과 동시 사용). */
+export function Drawer({ open, title, badge, kind = "doc", modal = true, onClose, children, footer }: {
+  open: boolean; title: string; badge?: React.ReactNode; kind?: "doc" | "assistant" | "side";
+  modal?: boolean; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode;
 }) {
-  const ref = useFocusTrap(open, onClose);
+  const ref = useFocusTrap(open && modal, onClose);
+  useEffect(() => {
+    if (!open || modal) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, modal, onClose]);
   if (!open) return null;
   return (
     <>
-      <div className="backdrop drawer-backdrop" onMouseDown={onClose} />
-      <aside ref={ref} className={`drawer ${kind === "assistant" ? "assistant" : ""}`} role="dialog" aria-modal="true" aria-labelledby="drawer-title" tabIndex={-1}>
+      {modal && <div className="backdrop drawer-backdrop" onMouseDown={onClose} />}
+      <aside ref={ref} className={`drawer ${kind}`} role={modal ? "dialog" : "complementary"} aria-modal={modal ? true : undefined}
+        aria-labelledby="drawer-title" tabIndex={-1}>
         <div className="drawer-head">
           <h3 id="drawer-title" tabIndex={-1}>{title}</h3>{badge}<span className="spacer" />
           <button className="btn btn-tertiary btn-icon btn-sm" aria-label="닫기" onClick={onClose}><Icon name="close" /></button>

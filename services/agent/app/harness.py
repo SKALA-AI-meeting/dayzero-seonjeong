@@ -231,3 +231,23 @@ def with_retries(fn: Callable[[], Any], *, deadline: float, on_retry: Callable[[
                 on_retry(attempt + 1, e)
             time.sleep(delay)
     raise RuntimeError("unreachable")
+
+
+_MD_BOLD = re.compile(r"(\*\*|__)(.+?)\1")
+_MD_HEAD = re.compile(r"^\s{0,3}#{1,6}\s+", re.M)
+_MD_BULLET = re.compile(r"^\s*[-*+]\s+", re.M)
+_MD_NUM = re.compile(r"^\s*\d+[.)]\s+", re.M)
+_MD_CODE = re.compile(r"```[a-z]*\n?|`")
+_MD_RULE = re.compile(r"^\s*([-*_]\s*){3,}$", re.M)
+
+
+def to_chat_plain(text: str) -> str:
+    """Chat messages are plain conversational text: strip markdown syntax (bold, headings, lists, code, rules)."""
+    t = _MD_CODE.sub("", text)
+    t = _MD_RULE.sub("", t)
+    t = _MD_BOLD.sub(r"\2", t)
+    t = _MD_HEAD.sub("", t)
+    t = _MD_BULLET.sub("· ", t)
+    t = _MD_NUM.sub("· ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()

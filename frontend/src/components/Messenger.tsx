@@ -14,6 +14,7 @@ type Props = {
   busy: boolean;               // 같은 채널 run 진행 중
   placeholder: string;
   emptyText: string;
+  composerId?: string;
   quickPrompts?: string[];
   onSend: (text: string) => Promise<boolean>;
   onRetry: (runId: string) => void;
@@ -140,15 +141,15 @@ export function Messenger(p: Props) {
               </div>
             )}
             <div className="composer-box">
-              <label htmlFor="composer" className="sr-only">메시지</label>
-              <textarea id="composer" ref={taRef} rows={1} value={text} placeholder={p.placeholder} aria-describedby="composer-help"
+              <label htmlFor={p.composerId ?? "composer"} className="sr-only">메시지</label>
+              <textarea id={p.composerId ?? "composer"} ref={taRef} rows={1} value={text} placeholder={p.placeholder} aria-describedby={`${p.composerId ?? "composer"}-help`}
                 onChange={(e) => setText(e.target.value)} maxLength={4000}
                 onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
               <button className="btn btn-primary btn-icon" aria-label="메시지 보내기" disabled={p.busy || sending || !text.trim()} onClick={() => send()}>
                 <Icon name="send" />
               </button>
             </div>
-            <p id="composer-help" className="help">{p.busy ? "답변이 끝나면 다음 메시지를 보낼 수 있습니다." : "Enter 전송 · Shift+Enter 줄바꿈"}</p>
+            <p id={`${p.composerId ?? "composer"}-help`} className="help">{p.busy ? "답변이 끝나면 다음 메시지를 보낼 수 있습니다." : "Enter 전송 · Shift+Enter 줄바꿈"}</p>
           </>
         ) : <p className="help"><Icon name="lock" /> {p.readOnlyNote}</p>}
       </div>

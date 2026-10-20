@@ -28,12 +28,11 @@ export default function Office() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [docView, setDocView] = useState<{ doc: Doc; quote: string | null } | null>(null);
-  const [assistantOpen, setAssistantOpen] = useState(false);
   const [briefOpen, setBriefOpen] = useState(false);
   const [briefRequired, setBriefRequired] = useState(false);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [channel, setChannel] = useState<Channel>("team");
-  const [workTab, setWorkTab] = useState<"doc" | "tasks">("doc");
+  const [workTab, setWorkTab] = useState<"doc" | "tasks" | "assistant">("doc");
   const [workOpen, setWorkOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [runs, setRuns] = useState<Record<string, RunView>>({}); // key: COLLEAGUE | ASSISTANT
@@ -169,7 +168,7 @@ export default function Office() {
     if (i < 0) return body;
     return <>{body.slice(0, i)}<mark>{body.slice(i, i + quote.length)}</mark>{body.slice(i + quote.length)}</>;
   };
-  const showWork = (tab: "doc" | "tasks") => { setWorkTab(tab); setWorkOpen(true); setNavOpen(false); };
+  const showWork = (tab: "doc" | "tasks" | "assistant") => { setWorkTab(tab); setWorkOpen(true); setNavOpen(false); };
   const ch = CHANNELS[channel];
   const avatarSm = { width: 28, height: 28, fontSize: 12 };
 
@@ -232,7 +231,7 @@ export default function Office() {
             ))}
           </div>
           <div className="ws-nav-foot">
-            <button className="btn btn-block" onClick={() => setAssistantOpen(true)}><Icon name="sparkle" />AI 어시스턴트 열기</button>
+            <button className="btn btn-block" aria-pressed={workTab === "assistant"} onClick={() => showWork("assistant")}><Icon name="sparkle" />AI 어시스턴트 열기</button>
           </div>
         </nav>
 
@@ -248,7 +247,7 @@ export default function Office() {
               <span className="avatar colleague" aria-hidden="true" style={avatarSm}>이</span>
               <span className="avatar me" aria-hidden="true" style={avatarSm}>나</span>
             </span>
-            <button className="btn btn-sm hide-md" onClick={() => setAssistantOpen(true)}><Icon name="sparkle" />AI 어시스턴트</button>
+            <button className="btn btn-sm hide-md" onClick={() => showWork("assistant")}><Icon name="sparkle" />AI 어시스턴트</button>
           </div>
           {snap.approvals.length > 0 && channel === "team" && (
             <div className="sys-row"><div><Icon name="warning" />{COPY.approval_title} · {snap.approvals.length}건
@@ -282,9 +281,11 @@ export default function Office() {
                 기획안 {snap.approvals.length > 0 && <span className="badge warning">승인 {snap.approvals.length}</span>}</button>
               <button role="tab" id="tab-tasks" aria-controls="panel-tasks" className="tab" aria-selected={workTab === "tasks"} onClick={() => setWorkTab("tasks")}>
                 태스크 <span className="badge" aria-label={`미완료 ${openTasks}개`}>{openTasks}</span></button>
+              <button role="tab" id="tab-assistant" aria-controls="panel-assistant" className="tab" aria-selected={workTab === "assistant"} onClick={() => setWorkTab("assistant")}>
+                <Icon name="sparkle" />AI 어시스턴트</button>
             </div>
           </div>
-          <div className="work-body">
+          <div className={`work-body ${workTab === "assistant" ? "assistant-body" : ""}`}>
             <div id="panel-doc" role="tabpanel" aria-labelledby="tab-doc" hidden={workTab !== "doc"}>
               {snap.approvals.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
@@ -299,31 +300,30 @@ export default function Office() {
             <div id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden={workTab !== "tasks"}>
               <TaskBoard tasks={snap.tasks} readOnly={submitted} onMove={moveTask} onReview={review} onRevoke={revoke} />
             </div>
+            {workTab === "assistant" && (
+              <div id="panel-assistant" role="tabpanel" aria-labelledby="tab-assistant" className="messenger" style={{ flex: 1, minHeight: 0 }}>
+                <div className="row" style={{ padding: "12px 20px 0" }}><span className="badge">읽기 전용</span><span className="help" style={{ marginTop: 0, flex: 1 }}>{COPY.assistant_desc}</span></div>
+                <Messenger
+                  messages={assistantMsgs} run={runs.ASSISTANT ?? null} canWrite={!submitted}
+                  readOnlyNote="제출된 세션입니다." busy={busyFor("ASSISTANT")} composerId="assistant-composer"
+                  placeholder="질문, 자료 요약, 비교 분석, 초안 작성을 요청하세요" emptyText="회사 자료를 근거로 답하고 참조 문서명을 알려 드립니다."
+                  quickPrompts={["재참여율 정의 찾기", "운영 정책 요약하기", "지난주 회의록 요약하기"]}
+                  onSend={(t) => send("ASSISTANT", t)} onRetry={retryRun}
+                  onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
+                />
+              </div>
+            )}
           </div>
         </aside>
       </div>
 
-      <Drawer open={!!docView} title={docView?.doc.title ?? ""} badge={<span className="badge num">v{docView?.doc.version}</span>} onClose={() => setDocView(null)}>
+      <Drawer open={!!docView} kind="side" modal={false} title={docView?.doc.title ?? ""} badge={<span className="badge num">v{docView?.doc.version}</span>} onClose={() => setDocView(null)}>
         {docView && (
           <div className="stack">
-            <p className="muted">회사 자료 · 원문은 수정할 수 없습니다{docView.quote ? " · 인용 구간을 강조했습니다" : ""}</p>
+            <p className="muted">회사 자료 · 원문은 수정할 수 없습니다{docView.quote ? " · 인용 구간을 강조했습니다" : ""} · 열어 둔 채로 채팅·기획안·어시스턴트를 함께 쓸 수 있습니다</p>
             <div className="doc-body">{highlight(docView.doc.body ?? "", docView.quote)}</div>
           </div>
         )}
-      </Drawer>
-
-      <Drawer open={assistantOpen} kind="assistant" title="AI 어시스턴트" badge={<span className="badge">읽기 전용</span>} onClose={() => setAssistantOpen(false)}>
-        <div className="messenger" style={{ height: "calc(100% + 40px)", margin: -20 }}>
-          <p className="help" style={{ padding: "12px 20px 0" }}>{COPY.assistant_desc}</p>
-          <Messenger
-            messages={assistantMsgs} run={runs.ASSISTANT ?? null} canWrite={!submitted}
-            readOnlyNote="제출된 세션입니다." busy={busyFor("ASSISTANT")}
-            placeholder="질문, 자료 요약, 비교 분석, 초안 작성을 요청하세요" emptyText="회사 자료를 근거로 답하고 참조 문서명을 알려 드립니다."
-            quickPrompts={["재참여율 정의 찾기", "운영 정책 요약하기", "지난주 회의록 요약하기"]}
-            onSend={(t) => send("ASSISTANT", t)} onRetry={retryRun}
-            onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
-          />
-        </div>
       </Drawer>
 
       <Modal open={briefOpen} size="lg" title={COPY.brief_title}
@@ -342,7 +342,7 @@ export default function Office() {
             <ul className="checklist">
               <li>자료실의 회사 자료를 읽을 수 있습니다. 일부 자료는 공유된 뒤에 열립니다.</li>
               <li>이도현 동료와 # 재참여-개선 채널에서 업무를 나누고 의견을 나눌 수 있습니다.</li>
-              <li>AI 어시스턴트는 별도 도구로, 자료 요약·비교·초안 작성을 돕고 문서를 직접 바꾸지 않습니다.</li>
+              <li>AI 어시스턴트는 오른쪽 패널의 별도 탭으로, 자료 요약·비교·초안 작성을 돕고 문서를 직접 바꾸지 않습니다.</li>
               <li>문제 정의, 기능 선택, 최종 기획안은 직접 결정합니다.</li>
             </ul></div>
           <p className="help">업무 시간은 2시간이며, 시간이 끝나면 저장된 내용으로 자동 제출됩니다. 협업 행동과 AI 활용 기록이 관찰에 사용되며 최종 판단은 사람이 합니다.</p>

@@ -127,6 +127,11 @@ SECTION_QUERY = {"similar_cases": "비슷한 서비스 사례 같이달려 한�
                  "features": "재참여 기능 아이디어", "problem": "재참여율 문제", "interview_evidence": "사용자 인터뷰 의견"}
 
 
+DOC_HINTS = {"operating-policy": ("운영 정책", "정책"), "metrics-status": ("지표 현황", "재참여율 정의"),
+             "meeting-notes": ("회의록", "지난주 회의"), "company-intro": ("회사 소개", "서비스 소개", "회사·서비스"),
+             "user-interviews": ("인터뷰",)}
+DOC_TITLE = {"operating-policy": "운영 정책", "metrics-status": "지표 현황", "meeting-notes": "지난주 회의록",
+             "company-intro": "회사·서비스 소개", "user-interviews": "사용자 인터뷰 요약"}
 METRIC_RE = re.compile(r"(지표|재참여|수치|비율|규모|%|몇\s*명)")
 
 
@@ -251,20 +256,25 @@ def reason(state: WorkState) -> dict:
         extra = []
         if not scen.get("interviews_released"):
             extra.append("[아직 공유되지 않은 자료] 사용자 인터뷰 요약 — 내용을 본 것처럼 말하거나 인용하지 말 것. 01:05 이후 공유 예정.")
-        if state["intent"] == "policy_recheck":
+        wanted = [d for d, words in DOC_HINTS.items() if any(w in state["request"] for w in words)]
+        if state["intent"] == "policy_recheck" and "operating-policy" not in wanted:
+            wanted.append("operating-policy")
+        for doc_id in wanted[:2]:
+            if doc_id == "user-interviews" and not scen.get("interviews_released"):
+                continue
             t0 = time.monotonic()
             tcid = f"rr-{uuid.uuid4().hex[:8]}"
             gw.event(state["run_id"], "TOOL_START", {"tool_call_id": tcid, "tool_name": "read_resource"}, key=f"start:{tcid}")
-            policy = read_resource(gw, state["run_id"], "operating-policy")
-            gw.event(state["run_id"], "TOOL_END", {"tool_name": "read_resource", "safe_args": {"uri": "doc://moarun-rejoin-v1/operating-policy"},
-                                                   "outcome": "ok", "result_summary": {"chars": len(policy)}, "citations": [],
+            text = read_resource(gw, state["run_id"], doc_id)
+            gw.event(state["run_id"], "TOOL_END", {"tool_name": "read_resource", "safe_args": {"uri": f"doc://moarun-rejoin-v1/{doc_id}"},
+                                                   "outcome": "ok", "result_summary": {"chars": len(text)}, "citations": [],
                                                    "help_id": state["help_id"], "duration_ms": int((time.monotonic() - t0) * 1000)},
                      key=f"end:{tcid}")
-            extra.append(f"[운영 정책 원문 — Host가 Resource로 읽어 주입]\n{policy}")
-            body = policy.split("-->")[-1].strip()
+            extra.append(f"[{DOC_TITLE[doc_id]} 원문 — Host가 Resource로 읽어 주입]\n{text}")
+            body = text.split("-->")[-1].strip()
             first = body.split("\n")[0]
-            state.setdefault("citations", []).append({"document_id": "operating-policy", "chunk_id": None, "version": 1,
-                                                       "quote": first.split(". ")[0] + "."})
+            state.setdefault("citations", []).append({"document_id": doc_id, "chunk_id": None, "version": 1,
+                                                       "quote": first.split(". ")[0].rstrip(".") + "."})
         speaker = {"CANDIDATE": "지원자", "MANAGER": "팀장 한서윤", "SYSTEM": "시스템 알림", "COLLEAGUE": "이도현", "ASSISTANT": "AI 어시스턴트"}
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": H.mask_pii(pack.render_user_context() + ("\n\n" + "\n\n".join(extra) if extra else ""))}]
@@ -400,7 +410,8 @@ def _allowed_numbers(state: WorkState) -> set[str]:
 @_timed
 def respond(state: WorkState) -> dict:
     etype = "ASSISTANT_MESSAGE" if state["kind"] == "ASSISTANT" else "COLLEAGUE_MESSAGE"
-    payload: dict[str, Any] = {"content": state["answer"], "citations": _dedupe(state.get("citations", []))[:8]}
+    content = state["answer"] if state["kind"] == "ASSISTANT" else H.to_chat_plain(state["answer"])
+    payload: dict[str, Any] = {"content": content, "citations": _dedupe(state.get("citations", []))[:8]}
     if state.get("facts", {}).get("corrected"):
         payload["kind"] = "ERROR_CORRECTED"
     if state.get("limited"):
