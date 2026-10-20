@@ -6,10 +6,11 @@
 load_scenario → route_phase ─┬─ negotiate (E0 분업, 최대 3라운드: 제안마다 1회)
                              ├─ work      (E1~E3B 분기 라벨 + 서윤 feedback_rules)
                              └─ briefing  (E4 보고 ↔ 보드·diff 대조, 후속 질문 1회 → 종료)
-  → classify(닫힌 분류기: 허용 라벨 중 하나 또는 NONE) → decide
-  → record_observations(record_observation MCP) → apply_effects(턴 엔진 상태) → respond
+  → classify(닫힌 분류: live는 LLM이 라벨 후보·말투·의도만, 최종 라벨은 resolve_label 규칙으로 확정) → decide
+  → propose_fix(정정 수용 시 get_planted_error 수정 규칙으로 수정안 생성, 브리프와 어긋나면 수정안 없이 WRONG_CRITICISM)
+  → record_observations(record_observation MCP, LLM이 정한 라벨은 '[LLM 추정]') → apply_effects(턴 엔진 상태) → respond
        ├─ NONE: reason ⇄ call_mcp (live) → validate_output(정답 누설·근거 가드) → respond
-       └─ 정정 수용: propose_fix(get_planted_error) → persist_proposal → await_approval(interrupt)
+       └─ 수정안 있음: persist_proposal → await_approval(interrupt)
                      → execute_write | record_rejection → (다음 수정안 반복) → report_fix → END
 
 고정 대사(분기 reply)는 LLM 생성 없이 그대로 보낸다(meta.kind=SCENARIO_BRANCH). 반문(allow_pushback)은
@@ -27,7 +28,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from shared.config import POLICY_VERSION, settings
-from shared.scenario import targets_in
+from shared.scenario import claim_kind, contradicts_brief, targets_in
 
 from . import harness as H
 from .clients import Gateway, call_tool, get_prompt, list_read_tools
@@ -52,6 +53,7 @@ class WorkState(TypedDict, total=False):
     text: str
     labels: list[str]
     label: str
+    label_source: str
     reply: dict | None
     observes: list[dict]
     effects: dict
@@ -218,13 +220,13 @@ RULES: dict[str, Any] = {
     "HARSH_BLAME": lambda t, tg: re.search(r"(왜\s*이렇게|제대로\s*(좀|안)|대충|한심|짜증|도대체|정신\s*차|이것도\s*못)", t),
     "GIVE_UP_AND_FIX_SELF": lambda t, tg: re.search(r"(제가\s*(할게요|고칠게요|수정할게요|반영할게요|하겠습니다|고치겠|할께요)|제가\s*대신|아\s*괜찮아요|괜찮습니다|됐어요)", t),
     "REQUEST_REPEATED_WITH_REASON": lambda t, tg: REQ.search(t) or REASON.search(t),
-    "WRONG_CRITICISM": lambda t, tg: re.search(r"(3,?000\s*P|11\s*/\s*15|결제\s*수단).{0,12}(틀|아니|잘못)", t),
+    "WRONG_CRITICISM": lambda t, tg: claim_kind(t) == "WRONG",  # 규칙 판정(resolve_label에서 최종 확정)
     "SPECIFIC_CORRECTION": lambda t, tg: tg and (REQ.search(t) or "?" in t or re.search(r"(틀|잘못|아니라|다르|없는|안\s*맞)", t)),
     "VAGUE_CRITICISM": lambda t, tg: not tg and re.search(r"(이상한|이상해|틀린\s*것\s*같|잘못된\s*것\s*같|뭔가|다시\s*봐)", t),
     "OUT_OF_SCOPE_REQUEST": lambda t, tg: False,  # fixture는 E2-CHANGE 대상 정정 요청으로 대신 판정(live 분류기 전용)
     "HELP_LATER_WITH_TIME": lambda t, tg: re.search(r"(\d{1,2}\s*시|\d+\s*분\s*(뒤|후)|이따|끝내고|끝나고|후에|조금\s*뒤)", t),
     "HELP_NOW": lambda t, tg: re.search(r"(지금|바로|같이\s*봐|볼게요|봐\s*드릴|봐드릴|어디가|어떤\s*부분|보여\s*주)", t),
-    "DECLINE_WITH_REASON": lambda t, tg: re.search(r"(어렵|힘들|못\s*할|바빠|바쁘|여유가\s*없|지금은\s*안)", t),
+    "DECLINE_WITH_REASON": lambda t, tg: re.search(r"(어렵|어려울|어려워|힘들|못\s*할|바빠|바쁘|여유가\s*없|지금은\s*안)", t),
     "RISK_ESCALATION": lambda t, tg: re.search(r"(빠듯|어려울|부족|늦어|리스크|못\s*끝|내일|우선순위)", t),
     "CLARIFYING_QUESTION": lambda t, tg: "?" in t or re.search(r"(인가요|나요|건가요|되나요|맞나요)", t),
     "REPLAN_OR_RESPLIT": lambda t, tg: re.search(r"(나눠|나누|분담|맡아|맡을|재분배|담당|보드)", t),
@@ -247,19 +249,70 @@ def classify_rules(text: str, targets: list[str], labels: list[str]) -> str:
     return "NONE"
 
 
-def classify_live(state: WorkState, labels: list[str]) -> str:
+BLAME_RE = re.compile(r"(대충|제대로\s*(좀|안)|왜\s*이렇게|왜\s*.{0,12}안\s*(보|하|읽|확인)|한심|짜증|도대체|정신\s*차|이것도\s*못)")
+SHARE_RE = re.compile(r"((맞춰|고쳐|수정해|반영해|바꿔|채워)\s*(뒀|놨|두었|놓았)|해\s*뒀어요)")
+RISK_RE = re.compile(r"(빠듯|어려울|부족|늦어|리스크|못\s*끝|우선순위|시간이\s*모자)")
+CORRECTION_FAMILY = {"SPECIFIC_CORRECTION", "WRONG_CRITICISM", "VAGUE_CRITICISM"}
+
+
+def classify_live(state: WorkState, labels: list[str], event_labels: list[str]) -> dict:
+    """LLM은 라벨 후보와 함께 말투(비난 여부)·의도(요청/공유/질문)만 판단한다. 정정 대상 판정은 규칙(resolve_label)."""
     from langchain_core.messages import HumanMessage, SystemMessage
     system, _ = H.load_prompt("classify-branch-v1")
     ctx = state["ctx"]
     recent = [f"({m['actor']}) {H.truncate_tokens(m['content'], 80)}" for m in ctx["messages"][-6:]]
+    common = [lb for lb in labels if lb not in event_labels]
     user = json.dumps({"event": {k: (ctx.get("event") or {}).get(k) for k in ("id", "type", "script")},
                        "pushback_pending": bool(ctx["state"].get("pushback_pending")), "recent": recent,
-                       "allowed_labels": labels + ["NONE"], "message": state["text"]}, ensure_ascii=False)
+                       "event_labels": event_labels, "common_labels": common + ["NONE"], "message": state["text"]},
+                      ensure_ascii=False)
     llm = _llm(json_mode=True)
     ai = H.with_retries(lambda: llm.invoke([SystemMessage(system), HumanMessage(H.mask_pii(user))]), deadline=time.monotonic() + 30)
     _usage(state, ai)
-    label = (json.loads(ai.content or "{}") or {}).get("label", "NONE")
-    return label if label in labels else "NONE"
+    out = json.loads(ai.content or "{}") or {}
+    label = out.get("label", "NONE")
+    return {"label": label if label in labels else "NONE", "tone": out.get("tone"), "intent": out.get("intent")}
+
+
+def resolve_label(label: str, text: str, labels: list[str], event_labels: list[str], *, pending: bool,
+                  tone: str | None = None, intent: str | None = None) -> tuple[str, str]:
+    """1차 라벨(LLM 또는 fixture 규칙)을 규칙으로 확정한다. 반환 (label, 결정 주체 'llm'|'rule').
+
+    1) 반문 대기(Graph 상태)에서 온 요청 → REQUEST_REPEATED_WITH_REASON 우선(요청을 거두면 GIVE_UP_AND_FIX_SELF)
+    2) 비난 말투 → 활성 이벤트의 BLAME_FOCUSED, 없으면 HARSH_BLAME(VAGUE보다 우선)
+    3) 공유 의도('맞춰뒀어요') → SOLUTION_FOCUSED_SHARE(이벤트 라벨일 때)
+    4) 일정 리스크 표현 → RISK_ESCALATION(CLARIFYING보다 우선)
+    5) 활성 이벤트 라벨은 공통 피드백 라벨보다 우선해 그대로 둔다(규칙이 지목 대상을 찾은 경우 제외)
+    6) 정정 계열·지목 대상이 있는 메시지는 지목 대상을 심어둔 오류·브리프와 대조: SPECIFIC / WRONG / 대상 없으면 VAGUE
+    """
+    allowed = set(labels)
+    by_llm = tone is not None or intent is not None
+    if pending:
+        if "GIVE_UP_AND_FIX_SELF" in allowed and RULES["GIVE_UP_AND_FIX_SELF"](text, []):
+            return "GIVE_UP_AND_FIX_SELF", "rule"
+        if "REQUEST_REPEATED_WITH_REASON" in allowed and (
+                label in ("OUT_OF_SCOPE_REQUEST", "SPECIFIC_CORRECTION", "REQUEST_REPEATED_WITH_REASON")
+                or intent == "request" or REQ.search(text) or REASON.search(text)):
+            return "REQUEST_REPEATED_WITH_REASON", "rule"
+    if BLAME_RE.search(text) or tone == "blame":
+        for lb in ("BLAME_FOCUSED", "HARSH_BLAME"):
+            if lb in allowed:
+                return lb, "rule" if BLAME_RE.search(text) else "llm"
+    if "SOLUTION_FOCUSED_SHARE" in allowed and (SHARE_RE.search(text) or intent == "share"):
+        return "SOLUTION_FOCUSED_SHARE", "rule" if SHARE_RE.search(text) else "llm"
+    if "RISK_ESCALATION" in allowed and RISK_RE.search(text) and label in ("CLARIFYING_QUESTION", "RISK_ESCALATION", "NONE"):
+        return "RISK_ESCALATION", "rule"
+    claim = claim_kind(text)
+    if label in event_labels and label not in CORRECTION_FAMILY and not claim:
+        return label, "llm" if by_llm else "rule"
+    if label in CORRECTION_FAMILY | {"OUT_OF_SCOPE_REQUEST", "NONE"} or claim:
+        if claim == "SPECIFIC" and "SPECIFIC_CORRECTION" in allowed:
+            return "SPECIFIC_CORRECTION", "rule"
+        if claim == "WRONG" and "WRONG_CRITICISM" in allowed:
+            return "WRONG_CRITICISM", "rule"
+        if label in CORRECTION_FAMILY:
+            return ("VAGUE_CRITICISM" if "VAGUE_CRITICISM" in allowed else "NONE"), "rule"
+    return label, "llm" if by_llm else "rule"
 
 
 @_timed
@@ -268,16 +321,21 @@ def classify(state: WorkState) -> dict:
         return {}
     labels = state.get("labels") or []
     if not labels:
-        return {"label": "NONE"}
-    label = "NONE"
+        return {"label": "NONE", "label_source": "rule"}
+    ev = state["ctx"].get("event") or {}
+    event_labels = [b["when"] for b in ev.get("branches", []) if b["when"] in labels]
+    pending = bool(state["ctx"]["state"].get("pushback_pending"))
+    tone = intent = None
     if S.llm_mode == "live":
         try:
-            label = classify_live(state, labels)
+            r = classify_live(state, labels, event_labels)
+            first, tone, intent = r["label"], r.get("tone") or "neutral", r.get("intent") or "other"
         except Exception:  # noqa: BLE001 — 분류 실패는 규칙 분류로 대체(즉흥 연출 없음)
-            label = classify_rules(state["text"], state["targets"], labels)
+            first = classify_rules(state["text"], state["targets"], labels)
     else:
-        label = classify_rules(state["text"], state["targets"], labels)
-    return {"label": label, "token_usage": state.get("token_usage")}
+        first = classify_rules(state["text"], state["targets"], labels)
+    label, source = resolve_label(first, state["text"], labels, event_labels, pending=pending, tone=tone, intent=intent)
+    return {"label": label, "label_source": source, "token_usage": state.get("token_usage")}
 
 
 # ---- decide: label → 고정 대사·관찰 코드·상태 효과·정정 수용 -----------------------------------
@@ -434,8 +492,11 @@ def record_observations(state: WorkState) -> dict:
     for o in state.get("observes") or []:
         if not o.get("evidence", {}).get("id"):
             continue
+        note = o.get("note", "")
+        if state.get("phase") == "work" and state.get("label_source") == "llm":
+            note = "[LLM 추정] " + note  # 라벨을 LLM이 정했고 규칙으로 확정되지 않은 분기 → 리포트에 'LLM 추정' 표시
         mcp(state, "record_observation", {"code": o["code"], "evidence_ref": o["evidence"], "event_id": o.get("event_id"),
-                                          "subject": o.get("subject"), "note": o.get("note", "")})
+                                          "subject": o.get("subject"), "note": note})
     return {}
 
 
@@ -616,7 +677,7 @@ def respond(state: WorkState) -> dict:
 
 
 def after_respond(state: WorkState) -> str:
-    return "propose_fix" if state.get("targets") else END
+    return "persist_proposal" if state.get("fixes") else END
 
 
 # ---- 정정 수용: 수정안 → 승인 interrupt → 적용 ---------------------------------------------------------
@@ -633,7 +694,12 @@ def _apply_ops(body: str, ops: list[dict]) -> str:
 
 @_timed
 def propose_fix(state: WorkState) -> dict:
-    """요청받은 대상만 고친다(get_planted_error의 수정 규칙). 정답 값은 수정안 본문에만 들어가고 발화에는 쓰지 않는다."""
+    """요청받은 대상만 고친다(get_planted_error의 수정 규칙). 정답 값은 수정안 본문에만 들어가고 발화에는 쓰지 않는다.
+
+    응답 전에 실행한다. 안전장치: 수정안이 브리프(brief_facts)와 어긋나면 수정안을 만들지 않고
+    WRONG_CRITICISM 응답("브리프엔 이렇게 돼 있어서요…")으로 바꾸며 정정 요청 코드(CO+5)도 남기지 않는다."""
+    if not state.get("targets"):
+        return {"fixes": [], "fix_index": 0, "fix_results": []}
     p = mcp(state, "get_planted_error", {"error_ids": state["targets"]})
     ops_by_art: dict[str, list[dict]] = {}
     for it in (p.get("data") or {}).get("items", []):
@@ -646,15 +712,16 @@ def propose_fix(state: WorkState) -> dict:
         if not a:
             continue
         new = _apply_ops(a["body"], ops)
+        if contradicts_brief(a["body"], new):
+            rule = _rule(state, "WRONG_CRITICISM")
+            return {"fixes": [], "targets": [], "fix_index": 0, "fix_results": [], "label": "WRONG_CRITICISM", "label_source": "rule",
+                    "reply": {"actor": "colleague", "text": rule["reply"]},
+                    "observes": [o for o in state.get("observes") or [] if o["code"] != "CO+5"]}
         if new != a["body"]:
             fixes.append({"artifact_key": key, "base_version": a["version"], "content": new,
                           "targets": [t for t in state["targets"] if any(o in ops for o in
                                       next((i["fix"] for i in p["data"]["items"] if i["id"] == t), []))]})
     return {"fixes": fixes, "fix_index": 0, "fix_results": []}
-
-
-def after_propose(state: WorkState) -> str:
-    return "persist_proposal" if state.get("fixes") else END
 
 
 @_timed
@@ -726,14 +793,14 @@ def build(checkpointer):
     g.add_edge("briefing", "record_observations")
     g.add_edge("work", "classify")
     g.add_edge("classify", "decide")
-    g.add_edge("decide", "record_observations")
+    g.add_edge("decide", "propose_fix")
+    g.add_edge("propose_fix", "record_observations")
     g.add_edge("record_observations", "apply_effects")
     g.add_conditional_edges("apply_effects", after_effects, ["reason", "respond", END])
     g.add_conditional_edges("reason", after_reason, ["call_mcp", "validate_output"])
     g.add_conditional_edges("call_mcp", after_call, ["reason", "validate_output"])
     g.add_edge("validate_output", "respond")
-    g.add_conditional_edges("respond", after_respond, ["propose_fix", END])
-    g.add_conditional_edges("propose_fix", after_propose, ["persist_proposal", END])
+    g.add_conditional_edges("respond", after_respond, ["persist_proposal", END])
     g.add_edge("persist_proposal", "await_approval")
     g.add_conditional_edges("await_approval", after_approval, ["execute_write", "record_rejection"])
     g.add_edge("execute_write", "next_fix")

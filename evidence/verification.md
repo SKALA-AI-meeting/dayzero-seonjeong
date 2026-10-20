@@ -24,7 +24,7 @@
 | AT-14 | Harness 8요소 | PASS | eval_harness `sc-a-final` 8/8 → [../evals/results/harness-v1-sc-a-final.json](../evals/results/harness-v1-sc-a-final.json). H-OBS: trace_id 17/17, LangSmith 매칭 17/17. token_usage는 fixture라 0 |
 | AT-15 | 디브리핑 | PASS | 연출 안내 문구, 소감 1회 저장, 리포트 조회 시 병합(smoke_flow·UI) |
 | AT-16 | 대기열 제거 | PASS | `infra/check-no-queue.sh` 0건(lock 파일 제외 — `package-lock.json`의 integrity 해시에 우연히 포함된 문자열, 사용자 승인). DB 컨테이너만으로 전체 기동·health ok |
-| AT-17 | 실제 LLM 1회 시연 | **부분 통과(49/51)** | 아래 'AT-17 live 검증' 참고. E3B 해결 중심 공유가 오분류되어 CO+3 미기록 — 수정 전 보고 상태 |
+| AT-17 | 실제 LLM 1회 시연 | PASS(2차) | 1차 49/51 → 분류 개선 후 2차 live 흐름 51/51, work 분류 live 22/22·회귀 6/6. 아래 'AT-17 live 검증' |
 
 UI(실제 브라우저, [ui_check.py](ui_check.py), 시스템 Chrome headless): 9/9 PASS, 콘솔 오류 0. 캡처: [screens/](screens/) 01 입장 · 02 과제 안내 · 03 E0 분업 카드 · 04 태스크 보드 · 05 공유 문서(작업본) · 06 승인 카드 · 07 반영 후 · 08 1024px · 09 디브리핑 · 10 관리자 세션 · 11 리포트.
 
@@ -69,3 +69,24 @@ live 오분류 6건(수정하지 않음):
 | E3B | 금액이 완전히 틀렸던데 왜 브리프 안 보셨어요? | BLAME_FOCUSED/HARSH_BLAME | WRONG_CRITICISM | CO-1 누락, 서윤이 "브리프엔 이렇게 돼 있어서요…"로 해명 |
 
 공통 원인 추정: live 분류기는 이벤트 라벨과 feedback_rules 라벨을 같은 무게로 보며, "확인 부탁"·"틀렸"·"가능할까요" 같은 표면 단서에 끌린다. 수정 후보(아직 적용 안 함): 분류 프롬프트에 활성 이벤트 라벨 우선 규칙과 라벨별 예문 추가, SPECIFIC_CORRECTION인데 정정 대상이 없으면 이벤트 라벨로 재분류, 반문 대기 중 OUT_OF_SCOPE_REQUEST를 재요청으로 처리.
+
+### 3. 분류 개선 후 재검증 (2026-10-21, 사용자 승인 수정 적용)
+
+적용한 수정(`agent/app/graph.py` `classify`·`resolve_label`·`propose_fix`, `shared/scenario.py`, `prompts/classify-branch-v1.md`):
+1. **정정 요청 vs 사실과 다른 지적은 규칙 판정** — 지원자가 지목한 내용을 심어둔 오류(wrong 위치·값)와 브리프 정답(brief_facts·planted correct)에 대조: 오류 지목 → SPECIFIC_CORRECTION, 맞는 내용을 틀렸다고 함 → WRONG_CRITICISM, 대상 없음 → VAGUE_CRITICISM. LLM은 말투(tone: blame/neutral)·의도(intent: request/share/question)와 라벨 후보만 낸다. E2 변경은 '요청'일 때만 정정(“제가 채워둘게요”는 이어받기).
+2. **수정안 안전장치** — 서윤 수정안이 브리프와 어긋나면(새 날짜·금액이 브리프·E2 변경·정답에 없거나 브리프 정답 표현이 사라짐) 수정안을 만들지 않고 "브리프엔 이렇게 돼 있어서요, 혹시 제가 잘못 본 걸까요?"로 응답, CO+5도 남기지 않음. 판단이 응답 전에 일어나도록 propose_fix를 respond 앞으로 옮김.
+3. **활성 이벤트 라벨 우선** — 프롬프트에서 event_labels를 common_labels보다 먼저 보되 정의에 실제로 맞을 때만. HARSH_BLAME은 "대충/제대로 안 하셨/왜 이렇게" 등 비난 표현이 있으면 VAGUE보다 우선(E3B에선 BLAME_FOCUSED). 라벨마다 예시 문장 추가. 공유 의도("맞춰뒀어요")는 SOLUTION_FOCUSED_SHARE, 일정 리스크 표현은 RISK_ESCALATION 우선.
+4. **반문 대기(Graph 상태 pushback_pending)에서 온 요청**은 OUT_OF_SCOPE가 아니라 REQUEST_REPEATED_WITH_REASON으로 먼저 판정(요청을 거두면 GIVE_UP_AND_FIX_SELF).
+5. 틀린 6문장을 회귀 케이스로 포함한 평가셋 [evals/classifier-v1.json](../evals/classifier-v1.json)(22건, regression 6).
+6. 리포트: 분기 라벨을 LLM이 정하고 규칙으로 확정되지 않은 관찰 코드는 **"LLM 추정"** 배지로 표시(관찰 note 접두어 → report `estimated`).
+
+| 항목 | 개선 전 | 개선 후 | 목표 |
+|---|---|---|---|
+| 회귀 6문장 | live 0/6 | **live 6/6 · fixture 6/6** | 6/6 |
+| work 분류 22건 | live 16/22 · fixture 20/22 | **live 22/22 · fixture 22/22** | 20/22 이상 |
+| phase 라우팅 · negotiate · briefing | 7/7 · 4/4 · 4/4 | 7/7 · 4/4 · 4/4 | — |
+| live 전체 흐름 | 49/51 | **51/51** ([live_flow.md](live_flow.md)) | 51/51 |
+| 리포트 "LLM 추정" 표시 | — | live 리포트 17개 코드 중 3개(AD+1·CO+2·CO+4, 라벨이 LLM 결정)만 표시, 규칙 확정 코드는 미표시 | 확인 |
+| fixture 회귀 | — | pytest 6/6 · smoke_mcp 35/35 · smoke_flow 51/51 · Harness 8/8(H-GUARD에 규칙 판정·브리프 대조 검사 추가) · tsc/eslint 통과 · 큐 잔재 0건 | — |
+
+개선 중 한 번 생긴 부작용(이벤트 라벨 우선이 과해 잡담·모호한 지적이 HELP_NOW로 감, 4건)은 프롬프트 조건과 "규칙이 지목 대상을 찾으면 이벤트 라벨보다 우선"으로 해소했다. 평가셋이 22건으로 작아 실제 지원자 표현 전반의 정확도를 보장하지는 않는다.

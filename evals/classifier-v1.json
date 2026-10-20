@@ -1,0 +1,272 @@
+{
+ "suite": "classifier-v1",
+ "description": "work 단계 분기 분류 평가셋(설계서 4·7장 라벨). regression=true는 2026-10-21 live 검증에서 틀린 6문장. 실행: services에서 uv run python -m scripts.classify_check",
+ "cases": [
+  {
+   "id": "C01",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "지금 바로 같이 볼게요. 어디가 헷갈리세요?",
+   "expected": [
+    "HELP_NOW"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C02",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "안내문 끝내고 11시쯤 같이 볼게요.",
+   "expected": [
+    "HELP_LATER_WITH_TIME"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C03",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "지금은 FAQ 마감 때문에 어려울 것 같아요. 죄송해요.",
+   "expected": [
+    "DECLINE_WITH_REASON"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C04",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "음… 글쎄요.",
+   "expected": [
+    "NONE"
+   ],
+   "kind": "애매한 표현",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C05",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "오늘 점심 뭐 먹을까요?",
+   "expected": [
+    "NONE"
+   ],
+   "kind": "무관한 말",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C06",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "표 일정이 11/2 ~ 11/31인데 11월은 30일까지라 없는 날짜예요. 브리프대로 고쳐주실 수 있을까요?",
+   "expected": [
+    "SPECIFIC_CORRECTION"
+   ],
+   "kind": "심어둔 오류 언급",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C07",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "표가 좀 이상한 것 같아요.",
+   "expected": [
+    "VAGUE_CRITICISM"
+   ],
+   "kind": "애매한 표현",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C08",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "왜 이렇게 대충 하셨어요? 다 틀렸잖아요.",
+   "expected": [
+    "HARSH_BLAME"
+   ],
+   "kind": "비난",
+   "pushback_pending": false,
+   "regression": true
+  },
+  {
+   "id": "C09",
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "text": "제외 대상이 '동일 결제수단 계정'으로 돼 있는데 그거 잘못된 것 같아요.",
+   "expected": [
+    "WRONG_CRITICISM"
+   ],
+   "kind": "사실과 다른 지적",
+   "pushback_pending": false,
+   "regression": true
+  },
+  {
+   "id": "C10",
+   "event": "E2",
+   "to": "MANAGER",
+   "text": "팀장님, 피초대자도 첫 결제를 해야 2,000P를 받나요?",
+   "expected": [
+    "CLARIFYING_QUESTION"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C11",
+   "event": "E2",
+   "to": "MANAGER",
+   "text": "푸시까지 하면 17시까지 빠듯할 것 같은데 우선순위 조정이 가능할까요?",
+   "expected": [
+    "RISK_ESCALATION"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": true
+  },
+  {
+   "id": "C12",
+   "event": "E2",
+   "to": "MANAGER",
+   "text": "넵 알겠습니다.",
+   "expected": [
+    "NONE"
+   ],
+   "kind": "애매한 표현",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C13",
+   "event": "E2",
+   "to": "COLLEAGUE",
+   "text": "푸시 문구는 서윤 씨가 맡아 주시고 저는 FAQ를 마무리할게요. 보드도 바꿔둘게요.",
+   "expected": [
+    "REPLAN_OR_RESPLIT"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C14",
+   "event": "E2",
+   "to": "COLLEAGUE",
+   "text": "서윤 씨 표에도 피초대자 2,000P 반영 부탁드려요.",
+   "expected": [
+    "OUT_OF_SCOPE_REQUEST",
+    "SPECIFIC_CORRECTION"
+   ],
+   "kind": "변경 반영 요청",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C15",
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "text": "수고하셨어요!",
+   "expected": [
+    "ACCEPT_AS_DONE"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C16",
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "text": "표랑 FAQ는 서윤 씨 담당이라서요. 팀장님이 전부 반영해 달라고 하셨어요.",
+   "expected": [
+    "REQUEST_REPEATED_WITH_REASON"
+   ],
+   "kind": "반문 뒤 재요청",
+   "pushback_pending": true,
+   "regression": true
+  },
+  {
+   "id": "C17",
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "text": "아 그럼 그냥 제가 할게요.",
+   "expected": [
+    "GIVE_UP_AND_FIX_SELF"
+   ],
+   "kind": "반문 뒤 포기",
+   "pushback_pending": true,
+   "regression": false
+  },
+  {
+   "id": "C18",
+   "event": "E3",
+   "to": "COLLEAGUE",
+   "text": "급하신 거 알겠어요. 제가 이어서 할 부분이 어디예요?",
+   "expected": [
+    "HANDOVER_QUESTION"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C19",
+   "event": "E3",
+   "to": "COLLEAGUE",
+   "text": "다녀오세요. 표 피초대자 칸은 제가 채워둘게요.",
+   "expected": [
+    "TAKE_OVER_AND_NOTIFY"
+   ],
+   "kind": "정상 응답",
+   "pushback_pending": false,
+   "regression": false
+  },
+  {
+   "id": "C20",
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "text": "네, 브리프랑 달라서 금액을 3,000P로 맞춰뒀어요. 확인 부탁해요.",
+   "expected": [
+    "SOLUTION_FOCUSED_SHARE"
+   ],
+   "kind": "정상 응답(live 흐름 실패 문장)",
+   "pushback_pending": false,
+   "regression": true
+  },
+  {
+   "id": "C21",
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "text": "금액이 완전히 틀렸던데 왜 브리프 안 보셨어요?",
+   "expected": [
+    "BLAME_FOCUSED",
+    "HARSH_BLAME"
+   ],
+   "kind": "비난",
+   "pushback_pending": false,
+   "regression": true
+  },
+  {
+   "id": "C22",
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "text": "주말에 뭐 하세요?",
+   "expected": [
+    "NONE"
+   ],
+   "kind": "무관한 말",
+   "pushback_pending": false,
+   "regression": false
+  }
+ ]
+}

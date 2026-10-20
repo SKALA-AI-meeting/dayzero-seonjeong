@@ -65,7 +65,8 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
             "related_events": [{"event_id": e, "virtual_time": fired[e]["virtual_time"], "turn": fired[e]["turn"]} for e in related],
             "observations": [{"code": o["code"], "definition": cb[o["code"]]["definition"], "polarity":
                               "neutral" if "·N" in o["code"] else ("positive" if "+" in o["code"] else "caution"),
-                              "event_id": o["event_id"], "subject": o["subject"], "note": o["note"], "source": o["source"],
+                              "event_id": o["event_id"], "subject": o["subject"], "note": (o["note"] or "").replace("[LLM 추정] ", ""),
+                              "source": o["source"], "estimated": o["source"] == "AGENT" and (o["note"] or "").startswith("[LLM 추정]"),
                               "evidence": evidence(o["evidence_ref"] or {})} for o in items],
             "notes": notes,
         })

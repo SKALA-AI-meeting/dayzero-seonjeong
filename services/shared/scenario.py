@@ -27,7 +27,8 @@ COMPETENCY_EVENTS = {
 TARGET_PATTERNS = {
     "PE-1": re.compile(r"11\s*/\s*31|31일|없는\s*날짜|(날짜|기간)[이가]?\s*(이상|틀|잘못|다르)"),
     "PE-2": re.compile(r"5,?000\s*P|5천|금액[이가]?\s*(이상|틀|잘못|다르)"),
-    "PE-3": re.compile(r"가족\s*계정|결제\s*수단"),
+    # PE-3 오답은 '가족 계정도 지급'. '결제수단'만 언급하면 정답(제외 조건)일 수 있어 누락을 지적할 때만 대상으로 본다.
+    "PE-3": re.compile(r"가족|결제\s*수단.{0,20}(빠졌|빠져|누락|없어|들어가야|넣어|추가|반영)"),
     "PE-4": re.compile(r"반말|쏴드림|톤\s*가이드|존댓말"),
     "E2-CHANGE": re.compile(r"2,?000\s*P|2천|피초대자|초대받은\s*(친구|분)|변경\s*사항|바뀐\s*(내용|조건)"),
 }
@@ -35,6 +36,54 @@ TARGET_PATTERNS = {
 
 def targets_in(text: str) -> list[str]:
     return [k for k, rx in TARGET_PATTERNS.items() if rx.search(text)]
+
+
+# ---- 정정 요청 vs 사실과 다른 지적: LLM이 아니라 규칙으로 판정 ---------------------------------
+# 지원자가 '틀렸다'고 지목한 내용이 심어둔 오류(wrong)면 정정 요청, 브리프의 정답(correct, brief_facts)이면 사실과 다른 지적.
+NEG_CLAIM = re.compile(r"(틀|잘못|아닌\s*것|아니에요|아니잖|이상하|맞지\s*않|오류|아닌가요|아닌데)")
+REQUEST = re.compile(r"(부탁|해\s*주|해주|반영해\s*주|넣어\s*주|주실|주세요|들어가야|반영돼야|해야\s*해요)")
+MISSING = re.compile(r"(빠졌|빠져|누락|없어|들어가야|넣어|추가|반영)")
+
+
+def correct_tokens(sc: dict | None = None) -> list[str]:
+    """브리프 정답 표현(정규화 전): 기간 끝 날짜, 초대자 보상 금액, 제외 조건, 지급 조건, 최대 인원."""
+    sc = sc or scenario()
+    out: list[str] = []
+    for v in sc["brief_facts"].values():
+        out += re.findall(r"\d+\s*/\s*\d+|[\d,]{4,}P|동일\s*결제\s*수단|결제\s*수단|첫\s*결제|최대\s*\d+\s*명", v)
+    return list(dict.fromkeys(out))
+
+
+def claim_kind(text: str, sc: dict | None = None) -> str | None:
+    """SPECIFIC(심어둔 오류·E2 변경을 지목) / WRONG(브리프의 맞는 내용을 틀렸다고 함) / None(지목 대상 없음)."""
+    tg = targets_in(text)
+    if any(t.startswith("PE-") for t in tg):
+        return "SPECIFIC"
+    norm = re.sub(r"\s+", "", text)
+    mentions_correct = any(re.sub(r"\s+", "", t) in norm for t in correct_tokens(sc) if not t.startswith("11/2"))
+    if mentions_correct and NEG_CLAIM.search(text) and not MISSING.search(text):
+        return "WRONG"
+    # E2 변경(피초대자 2,000P)은 서윤에게 반영을 '요청'할 때만 정정 요청이다('제가 채워둘게요'는 이어받기)
+    if "E2-CHANGE" in tg and REQUEST.search(text):
+        return "SPECIFIC"
+    return None
+
+
+def contradicts_brief(before: str, after: str, sc: dict | None = None) -> list[str]:
+    """수정안 안전장치: 수정으로 새로 생긴 날짜·금액이 브리프·E2 변경·심어둔 오류 정답에 없거나,
+    브리프의 정답 표현이 사라지면 어긋남으로 본다."""
+    sc = sc or scenario()
+    allowed = set(re.sub(r"\s+", "", t) for t in correct_tokens(sc))
+    allowed |= {"11/2", "2,000P"}  # 브리프 시작일, E2 changed_fact
+    for pe in sc.get("planted_errors", []):
+        allowed |= {re.sub(r"\s+", "", t) for t in re.findall(r"\d+\s*/\s*\d+|[\d,]{4,}P", pe["correct"])}
+    tok = lambda x: {re.sub(r"\s+", "", t) for t in re.findall(r"\d+\s*/\s*\d+|[\d,]{4,}P", x)}
+    bad = [f"new:{t}" for t in tok(after) - tok(before) if t not in allowed]
+    for t in correct_tokens(sc):
+        k = re.sub(r"\s+", "", t)
+        if k in re.sub(r"\s+", "", before) and k not in re.sub(r"\s+", "", after):
+            bad.append(f"removed:{t}")
+    return bad
 
 
 _ROW = re.compile(r"^\|\s*((?:RS|PL|AD|CO|HO)(?:[+-]\d|·N\d))\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")

@@ -109,7 +109,7 @@ AI 동료 한서윤, 박준호 팀장은 가상 인물이다.
 ## 11. 내일 팀원에게 넘길 TODO
 
 - [ ] **리허설 1회(D8):** 턴 수·대사 길이·E2B→E3 간격 조정. 트리거 턴은 `scenario.json`만 바꾸면 된다
-- [ ] **live 분류기 오분류 6건 수정**(evidence/verification.md 'AT-17 live 검증'): live 흐름 49/51, work 분류 16/22. 특히 E3B 해결 중심 공유가 SPECIFIC_CORRECTION으로 잡혀 서윤이 "앗 어떤 부분이요?"로 되묻는 문제, 사실과 다른 지적(WRONG_CRITICISM)이 정정 수정안으로 이어질 수 있는 문제. `uv run python -m scripts.classify_check`로 재확인
+- [ ] **분류 평가셋 확장:** live 분류는 `evals/classifier-v1.json` 22건 기준 22/22(회귀 6/6). 리허설에서 나온 실제 지원자 문장을 평가셋에 계속 추가하고 `uv run python -m scripts.classify_check`로 확인
 - [ ] **분기 분류 오분류 테스트:** fixture 규칙 분류(`graph.py` RULES)와 live 분류기 각각 라벨별 예문 세트로 확인. 특히 OUT_OF_SCOPE_REQUEST·WRONG_CRITICISM은 fixture에서 거의 안 잡힘
 - [ ] **약속 추적 정교화:** 지금은 "약속 문장 정규식 → 이후 지원자 수정·완료 언급이 있으면 이행"의 단순 규칙(I7). 약속 내용과 이후 행동의 대응 확인 필요
 - [ ] **E4 대조 정교화:** 보고 메시지의 '미완료 언급' 판정이 키워드 기반. 태스크별로 보고 내용과 보드·diff를 맞춰 보는 로직 필요

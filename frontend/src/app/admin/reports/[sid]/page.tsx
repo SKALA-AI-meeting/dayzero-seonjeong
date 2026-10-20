@@ -10,7 +10,7 @@ import { COPY } from "@/lib/types";
 type Evidence = { kind: string; id: string; actor?: string; quote?: string; at?: string; turn?: number; artifact?: string; diff?: string[];
   action?: string; entity?: string };
 type Obs = { code: string; definition: string; polarity: "positive" | "caution" | "neutral"; event_id: string | null; subject: string | null;
-  note: string | null; source: "AGENT" | "RULES"; evidence: Evidence };
+  note: string | null; source: "AGENT" | "RULES"; estimated?: boolean; evidence: Evidence };
 type Comp = { key: string; label: string; status: "OBSERVED" | "INSUFFICIENT" | "NO_OPPORTUNITY"; status_label: string;
   related_events: { event_id: string; virtual_time: string; turn: number }[]; observations: Obs[]; notes: string[];
   evidence_summary?: { text: string; label: string } };
@@ -123,6 +123,7 @@ export default function ReportPage() {
                         <span className="spacer" />
                         {o.event_id && <span className="badge">{o.event_id} {EVENT[o.event_id]}</span>}
                         {o.subject && /^(PE|E2)/.test(o.subject) && <span className="badge">{o.subject}</span>}
+                        {o.estimated && <span className="badge warning" title="분기 라벨을 LLM이 정했고 규칙으로 확정되지 않았습니다. 원문을 확인하세요.">LLM 추정</span>}
                         <span className="muted">{o.source === "AGENT" ? "대화 분기" : "로그 규칙"}</span>
                       </div>
                       {o.note && <p className="small muted">{o.note}</p>}

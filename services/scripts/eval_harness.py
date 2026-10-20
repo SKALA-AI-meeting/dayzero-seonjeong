@@ -106,6 +106,13 @@ def h_guard() -> dict:
     # 분기 분류는 닫힌 라벨 집합(해당 없으면 NONE) — 즉흥 연출 금지
     from agent.app.graph import classify_rules
     closed = classify_rules("오늘 점심 뭐 드세요?", [], ["HELP_NOW", "SPECIFIC_CORRECTION"]) == "NONE"
+    # 정정 요청 vs 사실과 다른 지적은 규칙 판정, 수정안은 브리프와 어긋나면 만들지 않음
+    from shared.scenario import claim_kind, contradicts_brief
+    claim_ok = (claim_kind("표 일정 11/31은 없는 날짜예요, 고쳐 주세요") == "SPECIFIC"
+                and claim_kind("제외 대상이 동일 결제수단인 거 잘못된 것 같아요") == "WRONG")
+    brief_guard = bool(contradicts_brief("| 제외 대상 | 동일 결제수단 계정 |", "| 제외 대상 | 없음 |")) and \
+        not contradicts_brief("| 일정 | 11/2 ~ 11/31 |", "| 일정 | 11/2 ~ 11/15 |")
+    closed = closed and claim_ok and brief_guard
     from gateway.app.internal.routes import execute_write
     from gateway.app.business import ToolError
     try:
@@ -115,7 +122,7 @@ def h_guard() -> dict:
         blocked = e.code == "APPROVAL_REQUIRED"
     return {"pass": bool(num) and bool(judge) and bool(leak) and not no_leak and md_ok and closed and blocked,
             "detail": {"ungrounded_number": num, "judgement_blocked": judge, "answer_leak_blocked": leak,
-                       "candidate_said_first_allowed": not no_leak, "chat_plain": md, "closed_classifier": closed,
+                       "candidate_said_first_allowed": not no_leak, "chat_plain": md, "closed_classifier_and_claim_rules_and_brief_guard": closed,
                        "write_without_approval_blocked": blocked}}
 
 
