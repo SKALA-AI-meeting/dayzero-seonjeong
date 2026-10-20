@@ -19,7 +19,7 @@ from langgraph.types import interrupt
 from shared.config import POLICY_VERSION, settings
 
 from . import harness as H
-from .clients import Gateway, call_tool, list_read_tools
+from .clients import Gateway, call_tool, list_read_tools, read_resource
 
 S = settings()
 
@@ -245,18 +245,39 @@ def reason(state: WorkState) -> dict:
         system, _ = H.load_prompt(name)
         pack = H.build_context(system, ctx["public_brief"]["public_brief"], ctx["messages"], [],
                                ctx.get("delegation"), H.rule_summary)
+        scen = ctx.get("scenario_state") or {}
+        extra = []
+        if not scen.get("interviews_released"):
+            extra.append("[아직 공유되지 않은 자료] 사용자 인터뷰 요약 — 내용을 본 것처럼 말하거나 인용하지 말 것. 01:05 이후 공유 예정.")
+        if state["intent"] == "policy_recheck":
+            t0 = time.monotonic()
+            tcid = f"rr-{uuid.uuid4().hex[:8]}"
+            gw.event(state["run_id"], "TOOL_START", {"tool_call_id": tcid, "tool_name": "read_resource"}, key=f"start:{tcid}")
+            policy = read_resource(gw, state["run_id"], "operating-policy")
+            gw.event(state["run_id"], "TOOL_END", {"tool_name": "read_resource", "safe_args": {"uri": "doc://moarun-rejoin-v1/operating-policy"},
+                                                   "outcome": "ok", "result_summary": {"chars": len(policy)}, "citations": [],
+                                                   "help_id": state["help_id"], "duration_ms": int((time.monotonic() - t0) * 1000)},
+                     key=f"end:{tcid}")
+            extra.append(f"[운영 정책 원문 — Host가 Resource로 읽어 주입]\n{policy}")
+            body = policy.split("-->")[-1].strip()
+            first = body.split("\n")[0]
+            state.setdefault("citations", []).append({"document_id": "operating-policy", "chunk_id": None, "version": 1,
+                                                       "quote": first.split(". ")[0] + "."})
+        speaker = {"CANDIDATE": "지원자", "MANAGER": "팀장 한서윤", "SYSTEM": "시스템 알림", "COLLEAGUE": "이도현", "ASSISTANT": "AI 어시스턴트"}
         msgs = [{"role": "system", "content": system},
-                {"role": "user", "content": H.mask_pii(pack.render_user_context())}]
+                {"role": "user", "content": H.mask_pii(pack.render_user_context() + ("\n\n" + "\n\n".join(extra) if extra else ""))}]
         for m in pack.messages:
-            msgs.append({"role": "user" if m["actor"] == "CANDIDATE" else "assistant",
-                         "content": H.mask_pii(f"[{m['actor']}] {m['content']}")})
+            if m["actor"] in ("COLLEAGUE", "ASSISTANT"):
+                msgs.append({"role": "assistant", "content": H.mask_pii(m["content"])})
+            else:
+                msgs.append({"role": "user", "content": H.mask_pii(f"({speaker.get(m['actor'], m['actor'])}) {m['content']}")})
         if state["kind"] == "DELEGATED":
             sec = state["facts"]["ctx"]["task"]["template_key"]
             msgs.append({"role": "user", "content": f"[분담 작업] 네가 맡은 '{state['request']}'({sec}) 섹션 초안을 회사 문서 근거로 작성하라. "
                                                     "문서에 없는 수치나 회사 정보는 쓰지 말고, 참조 문서명을 괄호로 적어라."})
         elif state["intent"] == "policy_recheck":
-            msgs.append({"role": "user", "content": "[지시] 지원자가 네 제안의 재검토를 요청했다. operating-policy 문서를 search_docs로 다시 확인하고, "
-                                                    "정책과 충돌하면 인정하고 정정 의견을 말하라."})
+            msgs.append({"role": "user", "content": "[지시] 지원자가 네 유료 멤버십 제안의 재검토를 요청했다. 위 운영 정책 원문을 근거로 "
+                                                    "충돌 여부를 확인하고, 충돌하면 정책 문장을 인용해 인정하고 제안을 철회·정정하라."})
     tools = _tool_specs(list_read_tools(gw, state["run_id"]))
     deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
     model = llm().bind_tools(tools)
@@ -268,6 +289,7 @@ def reason(state: WorkState) -> dict:
     calls = [{"id": tc["id"], "name": tc["name"], "args": tc["args"]} for tc in (ai.tool_calls or [])]
     msgs = msgs + [{"role": "assistant", "content": ai.content or "", "tool_calls": calls}]
     return {"llm_messages": msgs, "token_usage": usage, "step_count": state.get("step_count", 0) + 1,
+            "citations": state.get("citations", []),
             "plan": [{"tool": c["name"], "args": c["args"], "tool_call_id": c["id"]} for c in calls],
             "answer": ai.content if not calls else state.get("answer", "")}
 
@@ -340,6 +362,7 @@ def validate_output(state: WorkState) -> dict:
     if intent == "conversation" and S.llm_mode != "live":
         return {"answer": "말씀 감사해요. 그 방향으로 생각해 볼게요. 필요하신 자료가 있으면 편하게 말씀해 주세요."}
     text = (state.get("answer") or "") if S.llm_mode == "live" else fixture_answer(state)
+    text = re.sub(r"^\s*[\[(](COLLEAGUE|ASSISTANT|이도현|AI 어시스턴트)[\])]\s*", "", text)
     if not text.strip():
         text = fixture_answer(state)
     allowed = _allowed_numbers(state)
@@ -354,7 +377,7 @@ def validate_output(state: WorkState) -> dict:
     if state.get("limited"):
         text += f"\n(도구 사용 한도 {state['limited']}에 도달해 여기까지만 확인했어요.)"
     out = {"answer": text, "output_rewrite_count": rewrites + (1 if problems else 0)}
-    if intent == "policy_recheck":
+    if intent == "policy_recheck" and re.search(r"(철회|제외|빼|맞지 않|충돌|수정|정정)", text):
         out["facts"] = {**state["facts"], "corrected": True}
     return out
 

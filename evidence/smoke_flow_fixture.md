@@ -1,4 +1,4 @@
-# smoke_flow --mode fixture — 루프랩 모아런 시나리오 (2026-10-20 13:33 KST)
+# smoke_flow --mode fixture — 루프랩 모아런 시나리오 (2026-10-20 13:40 KST)
 
 web origin(localhost:3100) 경유, 시연 시간 이동으로 00:00~02:00 진행
 ```
@@ -39,5 +39,5 @@ PASS 영역별 관찰 근거(메시지·시각) — {'RESPONSIBILITY': 'OBSERVED
 PASS 점수·등급·순위·합불 없음
 PASS 지원자는 리포트 조회 불가
 PASS 디브리핑: 연출 상황 설명 — ['T-SPLIT', 'T-HELP', 'T-DELAY', 'T-INTERVIEW', 'T-PIVOT', 'T-ERROR', 'T-DEADLINE']
-결과: 37/37 PASS (session 02083aef-eda4-4e43-a660-4496c81b2033)
+결과: 37/37 PASS (session cd1e1b5d-68ce-4f2e-b60a-4594c3812ff2)
 ```
