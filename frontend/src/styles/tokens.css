@@ -1,0 +1,17 @@
+/* PRD 6.1 사용자 확정 디자인 토큰 — 화면별 임의 팔레트 추가 금지 */
+:root {
+  --color-primary: #FF6347;
+  --color-primary-hover: #E64F37;
+  --color-primary-soft: #FFF0EC;
+  --color-heading: #253247;
+  --color-body: #334155;
+  --color-muted: #64748B;
+  --color-background: #F8F9FC;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-success: #16A34A;
+  --color-info: #2563EB;
+  --color-warning: #D97706;
+  --color-error: #DC2626;
+  --color-on-primary: #111827;
+}
