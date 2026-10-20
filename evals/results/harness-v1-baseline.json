@@ -1,0 +1,135 @@
+{
+  "suite": "harness-v1",
+  "label": "baseline",
+  "ran_at": "2026-10-20T06:00:46.815273+00:00",
+  "mode": "fixture",
+  "summary": {
+    "PASS": 8,
+    "FAIL": 0,
+    "NOT_RUN": 0
+  },
+  "results": [
+    {
+      "id": "H-INS",
+      "element": "Instructions",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "prompt_hashes": {
+          "colleague-v2": "9e986bd852d6",
+          "assistant-v2": "efe7ff531da2",
+          "section-writer-v1": "0496bca04fde",
+          "summary-v1": "9907377fbc3a",
+          "report-v1": "eb5cf0d5dfc1"
+        },
+        "hash_stable": true,
+        "no_inline_system_prompt": true,
+        "forbidden_rules_in_prompt": true,
+        "assistant_read_only_toolset": true
+      }
+    },
+    {
+      "id": "H-TOOL",
+      "element": "Tools",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "truncated_tokens": 1505,
+        "error_tool_message": "{\"ok\": false, \"data\": null, \"error\": {\"code\": \"NOT_FOUND\", \"message\": \"아직 공유되지 않았습니다\", \"retryable\": false}, \"citations\":",
+        "masked": "연락처 [이메일], [전화번호]"
+      }
+    },
+    {
+      "id": "H-CTX",
+      "element": "Context",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "total_tokens": 5931,
+        "recent_messages": 6,
+        "summarized_ids": 24,
+        "summary_tokens": 805
+      }
+    },
+    {
+      "id": "H-STATE",
+      "element": "State/Memory",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "run_id": "5dd11568-84a6-449e-85b5-af4e7fe35eb3",
+        "thread_id": "9a5fe6d3-7a00-4ae4-864c-9fd056b8cea3:5dd11568-84a6-449e-85b5-af4e7fe35eb3",
+        "next": [
+          "await_approval"
+        ],
+        "approval_id": "befa58cc-e3d1-4ab5-a2ed-cc67ddeb7de4",
+        "checkpoints": 1664
+      }
+    },
+    {
+      "id": "H-LOOP",
+      "element": "Agent Loop",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "limits": {
+          "MAX_STEPS": "MAX_STEPS",
+          "MAX_TOOL_CALLS": "MAX_TOOL_CALLS",
+          "MAX_SAME_TOOL": "MAX_SAME_TOOL",
+          "ACTIVE_TIME_BUDGET": "ACTIVE_TIME_BUDGET"
+        },
+        "under_limit_allowed": true
+      }
+    },
+    {
+      "id": "H-GUARD",
+      "element": "Guardrails",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "ungrounded_number": [
+          "ungrounded_number:4500"
+        ],
+        "ungrounded_units": [
+          "ungrounded_unit:35%",
+          "ungrounded_unit:6주"
+        ],
+        "judgement_blocked": [
+          "forbidden:정답은"
+        ],
+        "chat_plain": "소규모\n· 첫째\n· 둘째\n제목",
+        "write_without_approval_blocked": true
+      }
+    },
+    {
+      "id": "H-REC",
+      "element": "Recovery",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "429_then_ok_calls": 3,
+        "503_always_calls": 3,
+        "503_result": "raised",
+        "non_retryable_calls": 1,
+        "elapsed_s": 7.0,
+        "model_fixed": "gpt-4o-mini"
+      }
+    },
+    {
+      "id": "H-OBS",
+      "element": "Observability",
+      "status": "PASS",
+      "pass": true,
+      "detail": {
+        "recent_runs": 20,
+        "with_trace_id": 20,
+        "with_token_usage": 18,
+        "langsmith": {
+          "enabled": true,
+          "matched_runs": 20,
+          "checked_runs": 20
+        }
+      }
+    }
+  ]
+}

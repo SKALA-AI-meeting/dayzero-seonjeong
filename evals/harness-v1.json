@@ -1,0 +1,14 @@
+{
+  "suite": "harness-v1",
+  "description": "Harness 8요소 고정 평가셋 (ARCHITECTURE §9, AGENT_GUIDE §6). 모델 호출 없이 재현 가능한 검사 + 실행 중 서비스·DB·LangSmith 대조.",
+  "cases": [
+    {"id": "H-INS", "element": "Instructions", "check": "prompts/*.md 로딩·버전 해시 안정, 코드에 장문 system prompt 없음, 어시스턴트 write 도구 없음, 금지 행동이 프롬프트에 명시"},
+    {"id": "H-TOOL", "element": "Tools", "check": "도구 결과 1500 tokens 잘림, 업무 오류가 ToolMessage 본문으로 직렬화, 이메일·전화 마스킹, 조회/변경 annotations"},
+    {"id": "H-CTX", "element": "Context", "check": "6000 tokens 초과 대화 → 오래된 메시지 요약(출처 msg ID 보존, 800 tokens 이하) 후 예산 이내"},
+    {"id": "H-STATE", "element": "State/Memory", "check": "승인 대기 run의 PostgreSQL checkpoint가 같은 thread_id로 존재하고 다음 노드가 await_approval"},
+    {"id": "H-LOOP", "element": "Agent Loop", "check": "단계 8회, 도구 총 5회, 같은 도구 3회, 활성 120초 한도에서 LimitExceeded"},
+    {"id": "H-GUARD", "element": "Guardrails", "check": "근거 없는 숫자·%·기간과 판정 표현 차단, 채팅 마크다운 제거, 승인 없는 변경 도구 거절"},
+    {"id": "H-REC", "element": "Recovery", "check": "429/503/timeout은 최초+2회 재시도 후 실패, 비재시도 오류는 1회, 다른 모델로 전환 없음"},
+    {"id": "H-OBS", "element": "Observability", "check": "run마다 trace_id·token_usage 저장, LangSmith trace에 run_id metadata 연결"}
+  ]
+}
