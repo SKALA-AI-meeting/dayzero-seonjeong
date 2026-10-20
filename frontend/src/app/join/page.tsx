@@ -4,9 +4,10 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { api, ApiError, loadMe, setCsrf } from "@/lib/api";
 
 const CONSENT_ITEMS = [
-  "과제 진행 중 메시지·자료 열람·도구 사용·문서 수정 같은 행동이 기록됩니다.",
-  "AI 동료·어시스턴트 사용 기록(요청, 조사 결과, 승인/거절)이 리포트에 포함됩니다.",
-  "리포트는 점수나 합격 여부를 판정하지 않으며, 최종 판단은 사람이 합니다.",
+  "업무 중 대화, 업무 분담과 태스크 변경, 공유 문서 변경 이력 같은 협업 행동이 기록되어 평가에 사용됩니다.",
+  "AI 어시스턴트와 AI 동료 사용 기록이 저장됩니다. 사용량만으로 평가하지 않습니다.",
+  "리포트는 점수·등급·합격 여부를 만들지 않으며, 최종 판단은 사람이 합니다.",
+  "업무 시간은 2시간이며, 시간이 끝나면 저장된 문서로 자동 제출됩니다.",
   "로컬 데모 환경에 저장되며 자동 파기 기능은 아직 제공되지 않습니다.",
 ];
 
@@ -59,12 +60,12 @@ function Join() {
 
   return (
     <main className="center-card card stack" style={{ maxWidth: 560 }}>
-      <h1><span className="brand-dot" />루프커머스 프로젝트 합류</h1>
+      <h1><span className="brand-dot" />루프랩 프로덕트팀 합류</h1>
       {error && <div className="alert error" role="alert">{error}</div>}
       {!error && !sessionId && <p className="muted">초대를 확인하는 중…</p>}
       {sessionId && !error && (
         <>
-          <p>오늘 모아마켓 장바구니 이탈 개선 과제에 서비스 기획자로 합류합니다. 팀장 한서윤, AI 동료 이도현과 함께 일합니다. 시간 제한은 없습니다.</p>
+          <p>오늘 루프랩 프로덕트팀에 기획자로 합류합니다. 루프랩은 동네 러닝 모임 앱 ‘모아런’을 운영하는 리모트 스타트업입니다. 팀장 한서윤, 기획자 이도현(AI 동료)과 함께 2시간 동안 일합니다.</p>
           <h3>시작 전 안내</h3>
           <ul>{CONSENT_ITEMS.map((t) => <li key={t}>{t}</li>)}</ul>
           <label className="row" style={{ fontWeight: 400 }}>

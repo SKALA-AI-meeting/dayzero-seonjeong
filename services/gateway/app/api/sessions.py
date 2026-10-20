@@ -72,7 +72,10 @@ def snapshot(c, sid: str, s: dict) -> dict:
     em = elapsed_min(s)
     return {"session": session_dto(s), "artifact": artifact_dto(art) if art else None,
             "tasks": list_tasks(c, sid), "messages": [message_dto(m) for m in msgs],
-            "active_run": run_dto(active_run(c, sid)), "approvals": [approval_dto(a) for a in approvals],
+            "active_run": run_dto(active_run(c, sid)),
+            "active_runs": [run_dto(r) for r in all_(c, """SELECT * FROM runs WHERE session_id=%s AND kind<>'REPORT'
+                                                       AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')""", (sid,))],
+            "approvals": [approval_dto(a) for a in approvals],
             "brief": {"title": brief["title"], **brief["public_brief"]}, "mode": settings().llm_mode,
             "clock": {"elapsed_min": round(em, 2), "duration_min": brief["public_brief"]["duration_minutes"],
                       "remaining_min": max(0.0, round(brief["public_brief"]["duration_minutes"] - em, 2))},

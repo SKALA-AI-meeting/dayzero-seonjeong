@@ -113,6 +113,6 @@ def list_sessions(cursor: str | None = None, p: Principal = Depends(admin)):
     items = [{"id": str(r["id"]), "alias": r["alias"], "status": r["status"], "phase": r["phase"],
               "report_status": r["report_status"], "created_at": r["created_at"].isoformat(),
               "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None} for r in rows[:100]]
-    return {"items": items, "next_cursor": rows[99]["created_at"].isoformat() if len(rows) > 100 else None,
+    return {"items": items, "demo_enabled": settings().app_env == "development", "next_cursor": rows[99]["created_at"].isoformat() if len(rows) > 100 else None,
             "pending_invites": [{"id": str(i["id"]), "alias": i["alias"], "expires_at": i["expires_at"].isoformat()}
                                 for i in invites]}
