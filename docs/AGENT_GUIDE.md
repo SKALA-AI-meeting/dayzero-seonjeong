@@ -65,7 +65,7 @@ dayzero-mvp/
   data/moarun-rejoin-v1/
   prompts/                           # colleague-v2/assistant-v2/report-v1/summary-v1.md
   evals/harness-v1.json               # Harness 8요소 고정 평가 사례
-  docs/                              # 이 4개 명세의 복사본
+  docs/                              # 명세·지침 원본(사본 없음)
   evidence/verification.md           # 실제 수행 시각·통과·실패·미구현
 ```
 

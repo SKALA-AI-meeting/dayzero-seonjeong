@@ -225,16 +225,22 @@ class WorkState(TypedDict):
 ```
 
 ```text
-load_context → classify_request → select_help → reason
-  ├─ 조사 필요 → authorize_read → call_mcp → validate_citation → reason (한도 내 반복)
-  ├─ 변경 제안 → validate_scope → persist_proposal → await_approval (interrupt)
-  │                ├─ 거절 → record_rejection → respond
-  │                └─ 승인 → revalidate → execute_mcp_write → respond
-  └─ 응답 가능 → validate_output → respond
-respond → record_facts → evaluate_conditions → emit_one_intervention_or_none → END
+(구현: services/agent/app/graph.py build())
+START → load_context → classify_request → select_help → reason
+reason ─┬─ 도구 필요(plan 있음) → call_mcp ─┬─ (live) reason  … 단계 8 / 도구 5 / 같은 도구 3 / 120초 한도 내 반복
+        │                                   ├─ 일반 응답 → validate_output → respond → END
+        │                                   └─ 위임 작업 → draft_delegation
+        ├─ 일반 응답 → validate_output → respond → END
+        └─ 위임 작업(DELEGATED) → draft_delegation → persist_proposal → await_approval(interrupt)
+                 await_approval ─┬─ APPROVE → execute_write(MCP patch_artifact_section) → respond → END
+                                 └─ REJECT / REVISE → record_rejection → respond → END
 ```
 
-각 사용자 명령은 별도 run, `thread_id = session_id + ':' + run_id`. session 전체 진행도는 sessions/actions가 소유하고 해당 run의 interrupt는 같은 thread_id와 checkpoint로 재개한다. 다른 사용자 메시지는 WAITING_APPROVAL 동안 새로운 read-only 응답 run을 시작하지 않고 RUN_BUSY를 반환한다. 지원자 직접 문서 편집과 승인/거절/위임 취소/제출은 계속 가능하며 base_version을 갱신한다.
+classify_request 의도(코드 규칙, 허용 범위는 코드가 판단): `delegated`(분담·수정 작업 run) · `policy_recheck`(01:30 오류 지적 → 운영 정책 원문 재확인 후 정정) · `revise_request`(채팅 수정·초안 요청 → 실제 재작성 run 생성) · `feedback`(작성 섹션 피드백) · `answer_request`(정답 요구 → 자료 범위 질문) · `investigate`(MCP 조사) · `conversation`.
+draft_delegation은 섹션 본문 전용 작성 단계(section-writer 프롬프트)로, 수정 요청이면 섹션 전체 재작성, 지원자 채팅 제안은 필수 반영 검사 후 누락 시 재작성·보정한다.
+시나리오 이벤트(00:10 분담 ~ 02:00 자동 제출)는 Graph 노드가 아니라 gateway 시험 시계(`gateway/app/timeline.py`, agent ticker가 2초마다 tick)가 서버에서 발생시킨다(v1.2의 evaluate_conditions/조건부 개입은 폐기).
+
+각 사용자 명령은 별도 run, `thread_id = session_id + ':' + run_id`. session 전체 진행도는 sessions/actions가 소유하고 해당 run의 interrupt는 같은 thread_id와 checkpoint로 재개한다. 같은 채널(팀 채팅/어시스턴트)에 진행 중인 응답 run이 있을 때만 RUN_BUSY를 반환한다. 동료의 백그라운드 섹션 작업이 승인 대기 중이어도 채팅은 계속 가능하다. 지원자 직접 문서 편집과 승인/거절/위임 취소/제출은 계속 가능하며 base_version을 갱신한다.
 
 `classify_request`는 LLM 구조화 출력으로 조사/위임 제안/질문을 선택할 수 있지만 허용 scope·도움 조건·이벤트 발생은 코드가 판단한다. 실패 시 명시적 ‘자료 조사’ 버튼/위임 카드로 동일 기능을 수행한다. 계획 자체를 지원자 대신 완성하는 action은 schema에 존재하지 않는다.
 
@@ -285,16 +291,18 @@ report job은 source_snapshot에 message/revision/action/tool/event ID를 고정
 
 jobs claim은 `FOR UPDATE SKIP LOCKED`로 단일 lease(150초)를 부여한다. 만료 job은 worker가 checkpoint/receipt를 조회하고 재개한다. WAITING_APPROVAL는 job을 DONE으로 바꾸며 승인 API가 같은 run의 job을 QUEUED로 갱신하고 resume 입력을 저장한다. run_id unique job은 새 row를 중복 생성하지 않는다. 시나리오 이벤트는 job이 아니라 agent ticker가 2초마다 호출하는 내부 `POST /internal/v1/timeline/tick`에서 세션 row lock 아래 발생시킨다(세션당 이벤트 1회, 02:00 자동 제출 포함). REPORT job도 전용 REPORT run을 만든다. 각 node의 활성 실행 시간을 checkpoint에 누적하고 승인 대기 시간을 빼서 총 120초 예산을 재개 후에도 유지한다. 프로세스 재시작 시 PENDING 승인은 만료 검사 후 UI에 복원하며 자동 승인하지 않는다. SSE 이벤트도 DB에서 복원한다.
 
-## 11. 품질 속성과 검증 연결
+## 11. 품질 속성과 검증 연결 (ISO/IEC 25010 8특성)
 
-| 관점 | 설계 선택 | 검증 |
+| 품질 특성 | 설계 선택 | 검증(evidence/verification.md) |
 |---|---|---|
-| 기능 적합성 | 시작→조사→위임→승인→제출→근거 | AT-01~07 |
-| 신뢰성 | checkpoint/job lease/멱등 receipt/SSE replay | AT-08~10 |
-| 보안성 | role/session scope, 원문 토큰 hash, 내부 capability | AT-11~12 |
-| 사용성 | 저장 상태·승인 차이·원문 이동·오류 재시도 | AT-03~07 |
-| 성능 효율 | 작은 context, 조회 상한, 단일 worker | 로컬 seed에서 일반 저장 응답 목표 1초 이내; LLM 지연 제외, 측정값은 별도 기록 |
-| 유지보수성 | typed 계약, 정책 버전, seed·fixture | schema/정책 단위 테스트 |
+| 기능 적합성 | 입장→분담→조사→섹션 초안·승인→제출→근거 리포트, 시험 시계 이벤트 9개 | AT-01~07, AT-13 · smoke_flow live 44/44 |
+| 성능 효율성 | 작은 context(입력 6000/출력 1200 tokens), 조회 상한(top-k 5, 결과 1500 tokens), exact 벡터 검색, 단일 worker | 로컬 seed 기준 일반 저장 응답 1초 이내 목표(LLM 지연 제외) |
+| 호환성 | 서비스 간 표준 계약(MCP Streamable HTTP, REST, SSE), 공통 도구 출력 `{ok,data,error,citations}` | smoke_mcp 22/22(SDK initialize/list/call/read) |
+| 사용성 | 저장 상태·승인 전후 비교·출처 원문 이동·오류 재시도, DESIGN_GUIDE 토큰·접근성 | AT-15(부분), 화면 캡처 evidence/screens |
+| 신뢰성 | PostgreSQL checkpoint, job lease, 멱등 receipt, SSE replay, 섹션 단위 stale 판정 | AT-08(재시작 재개 PASS), AT-09, AT-10(부분) |
+| 보안성 | role/session scope, 초대 토큰 hash, CSRF·Origin, 120초 scoped capability, 최소 권한 DB role, 제출 후 재열람 차단 | AT-11, AT-12 |
+| 유지보수성 | typed 계약, 시나리오 데이터·정책 분리, 버전 관리 프롬프트, Harness 평가셋 | eval_harness 8/8, 단위·통합 테스트 |
+| 이식성 | 서비스별 Dockerfile·Compose, 환경변수 설정, 로컬 임베딩 모델 | Compose 문법 검증(빌드·기동은 NOT_RUN) |
 
 ## 12. 참고한 기술 원문
 

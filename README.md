@@ -2,9 +2,24 @@
 
 지원자가 가상 리모트 스타트업 루프랩의 프로덕트팀에 합류해, AI 동료 이도현과 2시간 동안 "모아런 재참여율 개선 신규 기능 기획안"을 만듭니다. 업무 분담·도움 요청·자료 지연·요구사항 변경·동료 오류 같은 상황이 모든 지원자에게 같은 시각에 일어나고, 기업 담당자는 점수가 아닌 5개 영역(책임감·존중소통·협력·유연성·AI 활용)의 행동 근거 리포트를 확인합니다.
 
-시험 내용의 최우선 기준은 [DAYZERO_EXAM_SCENARIO.md](DAYZERO_EXAM_SCENARIO.md)이고, 기술 계약은 [docs/](docs/)(PRD·ARCHITECTURE·AGENT_GUIDE·SCENARIO_DATA)를 따릅니다.
+시험 내용의 최우선 기준은 [docs/DAYZERO_EXAM_SCENARIO.md](docs/DAYZERO_EXAM_SCENARIO.md)이고, 기술 계약·디자인·검증 기준은 [docs/](docs/README.md)(PRD·ARCHITECTURE·SCENARIO_DATA·AGENT_GUIDE·DESIGN_GUIDE)를 따릅니다.
 
 앱 루트는 이 저장소입니다(`dayzero-seonjeong`). 현재 상태와 검증 결과는 [evidence/](evidence/)에 있습니다.
+
+## 폴더 구조
+
+```text
+dayzero-seonjeong/
+  README.md              실행 방법·구성·검증 상태
+  compose.yaml           (미검증) 컨테이너 실행
+  docs/                  명세·지침 원본(문서 안내: docs/README.md)
+  data/moarun-rejoin-v1/ 시나리오 seed(회사 자료 5개, 지표, 인터뷰, 이벤트 정책, 검색 평가셋)
+  prompts/               버전 관리되는 시스템 프롬프트(동료·어시스턴트·섹션 작성·요약·리포트)
+  services/              Python(gateway, agent, business_mcp, rag_mcp, shared, scripts, tests)
+  frontend/              Next.js 웹(포트 3100)
+  evals/                 Harness 8요소 평가셋과 결과(evals/results/)
+  evidence/              검증 기록(verification.md), 스모크 결과, 화면 캡처
+```
 
 ## 구성
 
