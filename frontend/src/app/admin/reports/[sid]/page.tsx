@@ -13,7 +13,18 @@ type Fact = { text: string; at?: string | null; created_at?: string; event_id?: 
 type Situation = { event_id: string | null; situation: string; status: string; at: string | null };
 type Area = { dimension: string; label: string; status: string; situations: Situation[]; facts: Fact[]; limits: string;
   interpretation: { text: string; label: string } | null; follow_up?: string; usage?: Record<string, number> };
+type Obs = { area: string; source: "RULES" | "AI"; text: string; at: string | null; quote: string | null };
+type Req = { message_id: string; at: string; created_at: string; request: string; reply: string | null;
+  work_started?: { section: string; run_status: string; cards: { section: string; status: string; decision: string | null; comment: string }[] }[] };
+type Raw = {
+  stats: Record<string, number>; observations: Obs[]; colleague_requests: Req[]; assistant_log: Req[];
+  card_decisions: { at: string; section: string; status: string; decision: string | null; comment: string; draft_preview: string }[];
+  task_reviews: { at: string; section: string; decision: string; comment: string }[];
+  revision_history: { at: string; version: number; section: string; actor: string; chars_before: number; chars_after: number; after_preview: string }[];
+  section_authorship: Record<string, { 지원자: number; 동료: number; last: string | null }>;
+};
 type Body = {
+  raw?: Raw;
   generation_mode: string; policy_version: string; scenario_id: string; submitted_by: string;
   timeline: { event_id: string; at: string; situation: string }[];
   areas: Area[]; split_history: { kind: string; assignments: Record<string, string>; at: string }[];
@@ -23,6 +34,7 @@ const STATUS: Record<string, [string, string, string]> = {
   OBSERVED: ["관찰됨", "success", "check"], INSUFFICIENT_EVIDENCE: ["관련 행동 근거 부족", "warning", "warning"],
   NO_OPPORTUNITY: ["관찰 기회 없음", "", "info"], NOT_USED: ["사용하지 않음", "", "info"],
 };
+const CARD: Record<string, string> = { APPROVE: "승인", REJECT: "거절", REVISE: "재수정 요청" };
 const KIND: Record<string, string> = { message: "대화", action: "행동", artifact_revision: "문서 수정", tool_call: "도구 호출" };
 const STATE_COPY: Record<string, string> = { PENDING: "제출 내용을 정리할 준비를 하고 있습니다.", RUNNING: "행동 기록과 근거를 연결하고 있습니다." };
 
@@ -124,6 +136,7 @@ export default function ReportPage() {
                 </dl>
               </section>
             ))}
+            {b.raw && <RawMaterials raw={b.raw} />}
             <section className="card stack"><h3>한계 및 후속 확인점</h3><ul className="checklist">{b.limitations.map((l) => <li key={l}>{l}</li>)}</ul></section>
           </>
         )}
@@ -142,5 +155,79 @@ export default function ReportPage() {
         )}
       </Drawer>
     </AdminShell>
+  );
+}
+
+
+function Details({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+  return (
+    <section className="card stack">
+      <details open>
+        <summary className="row" style={{ cursor: "pointer" }}><h3 style={{ display: "inline" }}>{title}</h3><span className="badge">{count}건</span></summary>
+        <div style={{ marginTop: 12 }}>{children}</div>
+      </details>
+    </section>
+  );
+}
+
+/** 사람이 판단할 원자료 전체(판정 없음). AI 사전 확인 사항은 '어디를 볼지'만 짚는다. */
+function RawMaterials({ raw }: { raw: Raw }) {
+  const pre = { whiteSpace: "pre-wrap" as const, margin: 0 };
+  return (
+    <>
+      <h3>검토 자료(원문 전체)</h3>
+      <div className="alert neutral"><Icon name="info" />아래는 판단을 위한 원자료입니다. AI 사전 확인 사항은 판정이 아니라 확인할 위치를 먼저 짚어 둔 것이며, 판단은 원문을 보고 검토자가 합니다.</div>
+      <section className="card stack" aria-label="AI 사전 확인 사항">
+        <h3>AI 사전 확인 사항</h3>
+        <div className="table-wrap"><table>
+          <thead><tr><th style={{ width: 110 }}>관점</th><th style={{ width: 64 }}>시각</th><th>확인 내용</th><th style={{ width: 70 }}>출처</th></tr></thead>
+          <tbody>{raw.observations.map((o, i) => (
+            <tr key={i}>
+              <td><span className={`badge ${o.area.includes("태도") ? "warning" : ""}`}>{o.area}</span></td>
+              <td className="num">{o.at ?? "—"}</td>
+              <td>{o.text}{o.quote && <div className="muted">“{o.quote}”</div>}</td>
+              <td><span className={`badge ${o.source === "AI" ? "info" : ""}`}>{o.source === "AI" ? "AI 추정" : "규칙"}</span></td>
+            </tr>))}</tbody>
+        </table></div>
+      </section>
+      <Details title="동료(이도현)에게 한 요청과 결과" count={raw.colleague_requests.length}>
+        <div className="table-wrap"><table>
+          <thead><tr><th style={{ width: 64 }}>시각</th><th>지원자 요청</th><th>동료 답변</th><th style={{ width: 200 }}>시작된 작업·카드 결과</th></tr></thead>
+          <tbody>{raw.colleague_requests.map((r) => (
+            <tr key={r.message_id}>
+              <td className="num">{r.at}</td><td><p style={pre}>{r.request}</p></td>
+              <td className="small"><p style={pre}>{r.reply ?? "—"}</p></td>
+              <td className="small">{(r.work_started ?? []).length === 0 ? "—" : r.work_started!.map((w, i) => (
+                <div key={i}>{w.section}: {w.cards.length ? w.cards.map((c) => `${CARD[c.decision ?? ""] ?? c.status}${c.comment ? `(${c.comment.slice(0, 30)})` : ""}`).join(", ") : w.run_status}</div>))}</td>
+            </tr>))}</tbody>
+        </table></div>
+      </Details>
+      <Details title="확인 카드 결정 내역" count={raw.card_decisions.length}>
+        <div className="table-wrap"><table>
+          <thead><tr><th style={{ width: 64 }}>시각</th><th style={{ width: 150 }}>섹션</th><th style={{ width: 100 }}>결정</th><th>검토 사항</th><th>동료 초안(앞부분)</th></tr></thead>
+          <tbody>{raw.card_decisions.map((c, i) => (
+            <tr key={i}><td className="num">{c.at}</td><td>{c.section}</td><td>{CARD[c.decision ?? ""] ?? (c.status === "PENDING" ? "미결정" : c.status)}</td>
+              <td className="small">{c.comment || "—"}</td><td className="small"><p style={pre}>{c.draft_preview}</p></td></tr>))}</tbody>
+        </table></div>
+        {raw.task_reviews.length > 0 && <p className="help">태스크 검토: {raw.task_reviews.map((t) => `${t.at} ${t.section} ${t.decision}${t.comment ? `(“${t.comment.slice(0, 40)}”)` : ""}`).join(" · ")}</p>}
+      </Details>
+      <Details title="기획안 수정 이력" count={raw.revision_history.length}>
+        <div className="row" style={{ marginBottom: 8 }}>{Object.entries(raw.section_authorship).map(([sec, a]) => (
+          <span key={sec} className="badge">{sec}: 지원자 {a.지원자}회 · 동료 {a.동료}회</span>))}</div>
+        <div className="table-wrap"><table>
+          <thead><tr><th style={{ width: 64 }}>시각</th><th style={{ width: 50 }}>버전</th><th style={{ width: 150 }}>섹션</th><th style={{ width: 170 }}>수정 주체</th><th style={{ width: 90 }}>글자 수</th><th>수정 후(앞부분)</th></tr></thead>
+          <tbody>{raw.revision_history.map((h, i) => (
+            <tr key={i}><td className="num">{h.at}</td><td className="num">v{h.version}</td><td>{h.section}</td><td className="small">{h.actor}</td>
+              <td className="num small">{h.chars_before}→{h.chars_after}</td><td className="small"><p style={pre}>{h.after_preview}</p></td></tr>))}</tbody>
+        </table></div>
+      </Details>
+      <Details title="AI 어시스턴트 대화 전체" count={raw.assistant_log.length}>
+        <div className="table-wrap"><table>
+          <thead><tr><th style={{ width: 64 }}>시각</th><th>지원자 질문</th><th>어시스턴트 답변</th></tr></thead>
+          <tbody>{raw.assistant_log.map((r) => (
+            <tr key={r.message_id}><td className="num">{r.at}</td><td><p style={pre}>{r.request}</p></td><td className="small"><p style={pre}>{r.reply ?? "—"}</p></td></tr>))}</tbody>
+        </table></div>
+      </Details>
+    </>
   );
 }

@@ -20,6 +20,43 @@ S = settings()
 BANNED = re.compile(r"(점수|등급|순위|합격|불합격|탈락|채용\s*추천|우수한|부족한\s*지원자|성격)")
 
 
+def _observe(llm, body: dict) -> list[dict]:
+    """원자료를 보고 검토자용 사전 확인 사항('~한 부분에서 ~를 확인함')을 만든다. 판정 표현은 버린다."""
+    raw = body.get("raw") or {}
+    if not raw:
+        return []
+    from langchain_core.messages import HumanMessage, SystemMessage
+    system, _ = H.load_prompt("report-observe-v1")
+    slim = {"동료에게_한_요청": [{"시각": r.get("at"), "지원자_발화": r.get("request"), "동료_답변(지원자_발화_아님)": r.get("reply"),
+                                "시작된_작업": r.get("work_started")} for r in raw.get("colleague_requests", [])],
+            "확인_카드_결정(지원자)": [{"시각": c.get("at"), "섹션": c.get("section"), "결정": c.get("decision") or c.get("status"),
+                                   "지원자_검토사항": c.get("comment")} for c in raw.get("card_decisions", [])],
+            "태스크_검토(지원자)": raw.get("task_reviews", []),
+            "기획안_수정이력": [{k: h.get(k) for k in ("at", "section", "actor", "chars_before", "chars_after")} for h in raw.get("revision_history", [])],
+            "어시스턴트_대화": [{"시각": r.get("at"), "지원자_발화": r.get("request"), "어시스턴트_답변(지원자_발화_아님)": r.get("reply")}
+                           for r in raw.get("assistant_log", [])]}
+    cand_texts = [r.get("request") or "" for r in raw.get("colleague_requests", []) + raw.get("assistant_log", [])] + \
+                 [c.get("comment") or "" for c in raw.get("card_decisions", [])] + [t.get("comment") or "" for t in raw.get("task_reviews", [])]
+    msg = H.truncate_tokens(H.mask_pii(json.dumps(slim, ensure_ascii=False)), 5000)
+    try:
+        ai = H.with_retries(lambda: llm.invoke([SystemMessage(system), HumanMessage(msg)]), deadline=time.monotonic() + 100)
+        out = json.loads(ai.content or "{}").get("observations", [])
+    except Exception as e:  # noqa: BLE001
+        log.warning("observations skipped: %s", e)
+        return []
+    keep = []
+    for o in out:
+        if not isinstance(o, dict) or not o.get("text") or BANNED.search(str(o.get("text"))) or len(str(o["text"])) < 12:
+            continue
+        q = str(o.get("quote") or "").strip().strip('"“”')
+        if "태도" in str(o.get("area", "")):
+            # 태도 항목은 인용문이 실제 지원자 발화에 있을 때만 남긴다(동료·어시스턴트 발화 오귀속 방지)
+            if not q or not any(q[:20] in t for t in cand_texts if t):
+                continue
+        keep.append(o)
+    return keep[:10]
+
+
 def run_report(gw: Gateway, job: dict) -> None:
     sid, report_id = job["session_id"], job["input"]["report_id"]
     r = gw.post(f"/reports/{sid}/build", {"report_id": report_id, "mode": "RULES_FALLBACK"})
@@ -33,7 +70,7 @@ def run_report(gw: Gateway, job: dict) -> None:
                   "situations": [x["situation"] for x in a["situations"] if x["status"] == "OBSERVED"],
                   "facts": [f"{f.get('at') or ''} {f['text']}" for f in a["facts"][:8]]}
                  for a in body["areas"] if a["status"] == "OBSERVED" and a["facts"]]
-        if not items:
+        if not items and not (body.get("raw") or {}).get("colleague_requests"):
             return
         system, _ = H.load_prompt("report-v1")
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -48,7 +85,8 @@ def run_report(gw: Gateway, job: dict) -> None:
             key, text, follow = it.get("key"), str(it.get("interpretation", ""))[:400], str(it.get("follow_up", ""))[:300]
             if key and text and not BANNED.search(text + follow):
                 interp[key] = {"text": text, "label": "INFERENCE", "follow_up": follow}
-        if interp:
-            gw.post(f"/reports/{sid}/interpret", {"report_id": report_id, "interpretations": interp})
+        observations = _observe(llm, body)
+        if interp or observations:
+            gw.post(f"/reports/{sid}/interpret", {"report_id": report_id, "interpretations": interp, "observations": observations})
     except Exception as e:  # noqa: BLE001 — 해석 실패는 사실 리포트를 유지(RULES_FALLBACK)
         log.warning("report interpretation skipped: %s", e)

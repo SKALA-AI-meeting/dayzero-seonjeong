@@ -564,6 +564,7 @@ def build_report(sid: str, body: BuildIn):
                       "interpretation": None,
                       "limits": "사용량만으로 평가하지 않음" if asst else "AI 어시스턴트를 사용하지 않음(부정적 판단 근거 아님)"})
         split_actions = [a for a in acts if a["kind"] in ("SPLIT_ADJUSTED", "SPLIT_CONFIRMED")]
+        raw = collect_raw_materials(c, sid, s, snap)
         body_ = {
             "schema_version": "2.0", "generation_mode": "RULES_FALLBACK", "policy_version": "exam-v1", "scenario_id": "moarun-rejoin-v1",
             "submitted_by": snap.get("submitted_by"),
@@ -573,6 +574,7 @@ def build_report(sid: str, body: BuildIn):
             "split_history": [{"kind": a["kind"], "assignments": a["payload"].get("assignments"), "at": mm(a["payload"].get("elapsed_min"))}
                               for a in split_actions],
             "final_artifact": {"version": snap["artifact_version"], "empty_sections": [k for k, v in snap["sections"].items() if not v.strip()]},
+            **raw,
             "limitations": ["단일 가상 과제에서 관찰한 행동이며 성격·채용 성과를 단정하지 않음",
                             "관찰되지 않은 행동은 추정하지 않음", "점수·등급·순위·합격 여부를 생성하지 않음",
                             "LLM 해석 없이 규칙 기반 사실만 포함(RULES_FALLBACK)"],
@@ -644,7 +646,8 @@ def report_body(sid: str):
 
 class InterpretIn(Strict):
     report_id: str
-    interpretations: dict[str, dict]
+    interpretations: dict[str, dict] = Field(default_factory=dict)
+    observations: list[dict] = Field(default_factory=list)
 
 
 @router.post("/reports/{sid}/interpret")
@@ -663,6 +666,11 @@ def report_interpret(sid: str, body: InterpretIn):
                 if it.get("follow_up"):
                     a["follow_up"] = str(it["follow_up"])[:300]
                 n += 1
+        if body.observations and b.get("raw"):
+            b["raw"]["observations"] = [o for o in b["raw"].get("observations", []) if o.get("source") == "RULES"] + [
+                {"area": str(o.get("area", ""))[:20], "source": "AI", "text": str(o.get("text", ""))[:300],
+                 "at": str(o.get("at") or "")[:5] or None, "quote": str(o.get("quote") or "")[:200] or None} for o in body.observations[:12]]
+            n += 1
         if n:
             b["generation_mode"] = "LLM_WITH_RULES"
             b["limitations"] = [x for x in b["limitations"] if "RULES_FALLBACK" not in x] + [
@@ -686,3 +694,115 @@ def report_failed(sid: str, body: ReportFailedIn):
         if r:
             emit(c, sid, "REPORT_FAILED", {"report_id": body.report_id}, admin_payload={"report_id": body.report_id, "error": body.error[:300]})
     return {"status": "FAILED" if r else "UNCHANGED"}
+
+
+
+# ---- 사람이 판단할 원자료(판정 없음) -----------------------------------------------------------
+
+SEC_TITLE = {"problem": "문제 정의와 대상 사용자", "interview_evidence": "사용자 인터뷰 근거", "features": "핵심 기능 제안",
+             "similar_cases": "비슷한 서비스 사례", "metrics_timeline": "성공 지표와 출시 일정"}
+
+
+def collect_raw_materials(c, sid: str, s: dict, snap: dict) -> dict:
+    """리포트에 원자료를 빠짐없이 싣는다: 동료 요청과 결과, 확인 카드 결정, 기획안 수정 이력, 어시스턴트 대화 전체."""
+    off = float((s["policy_state"] or {}).get("time_offset_min", 0) or 0)
+    start = s["started_at"]
+
+    from zoneinfo import ZoneInfo
+
+    def at(ts) -> str:  # 실제 기록 시각(KST). 시연 시간 이동과 무관하게 원문 시각을 그대로 보여 준다
+        return ts.astimezone(ZoneInfo("Asia/Seoul")).strftime("%H:%M")
+
+    msgs = all_(c, "SELECT id, channel, actor, content, source_run_id, created_at FROM messages WHERE session_id=%s ORDER BY created_at", (sid,))
+    runs = all_(c, "SELECT id, kind, source_message_id, task_id, input, status, created_at FROM runs WHERE session_id=%s", (sid,))
+    apprs = all_(c, "SELECT id, run_id, before_after, status, created_at, decided_at FROM approvals WHERE session_id=%s ORDER BY created_at", (sid,))
+    decided = {a["entity_id"]: a for a in all_(c, "SELECT entity_id, payload, created_at FROM actions WHERE session_id=%s AND kind='APPROVAL_DECIDED'", (sid,))}
+    revs = all_(c, """SELECT r.version, r.actor, r.changed_sections, r.sections, r.created_at, r.run_id FROM artifact_revisions r
+                      WHERE r.session_id=%s ORDER BY r.version""", (sid,))
+    reviews = all_(c, "SELECT entity_id, payload, created_at FROM actions WHERE session_id=%s AND kind='TASK_REVIEWED' ORDER BY seq", (sid,))
+    tasks = {str(t["id"]): t for t in all_(c, "SELECT id, template_key FROM tasks WHERE session_id=%s", (sid,))}
+
+    by_run_reply = {}
+    for m in msgs:
+        if m["actor"] in ("COLLEAGUE", "ASSISTANT") and m["source_run_id"] and str(m["source_run_id"]) not in by_run_reply:
+            by_run_reply[str(m["source_run_id"])] = m
+    work_by_msg: dict[str, list] = {}
+    for r in runs:
+        if r["kind"] == "DELEGATED" and r["source_message_id"]:
+            work_by_msg.setdefault(str(r["source_message_id"]), []).append(r)
+    appr_by_run = {}
+    for a in apprs:
+        appr_by_run.setdefault(str(a["run_id"]), []).append(a)
+
+    def card_result(run) -> list[dict]:
+        out = []
+        for a in appr_by_run.get(str(run["id"]), []):
+            d = decided.get(str(a["id"]))
+            out.append({"section": SEC_TITLE.get(a["before_after"].get("section"), a["before_after"].get("section")),
+                        "status": a["status"], "decision": (d or {}).get("payload", {}).get("decision"),
+                        "comment": (d or {}).get("payload", {}).get("comment") or ""})
+        return out
+
+    colleague_requests, assistant_log = [], []
+    for m in msgs:
+        if m["actor"] != "CANDIDATE":
+            continue
+        reply = by_run_reply.get(str(m["source_run_id"])) if m["source_run_id"] else None
+        item = {"message_id": str(m["id"]), "at": at(m["created_at"]), "created_at": m["created_at"].isoformat(),
+                "request": m["content"], "reply": reply["content"] if reply else None}
+        if m["channel"] == "TEAM":
+            work = []
+            for r in work_by_msg.get(str(m["id"]), []):
+                sec = (r["input"] or {}).get("section") or tasks.get(str(r["task_id"]), {}).get("template_key")
+                work.append({"section": SEC_TITLE.get(sec, sec), "run_status": r["status"], "cards": card_result(r)})
+            item["work_started"] = work
+            colleague_requests.append(item)
+        else:
+            assistant_log.append(item)
+
+    card_decisions = []
+    for a in apprs:
+        d = decided.get(str(a["id"]))
+        card_decisions.append({"at": at(a["created_at"]), "section": SEC_TITLE.get(a["before_after"].get("section"), "-"),
+                               "status": a["status"], "decision": (d or {}).get("payload", {}).get("decision"),
+                               "comment": (d or {}).get("payload", {}).get("comment") or "",
+                               "draft_preview": (a["before_after"].get("after") or "")[:300]})
+    revision_history, prev = [], {}
+    for r in revs:
+        for sec in r["changed_sections"]:
+            before, after = prev.get(sec, ""), (r["sections"] or {}).get(sec, "")
+            revision_history.append({"at": at(r["created_at"]), "version": r["version"], "section": SEC_TITLE.get(sec, sec),
+                                     "actor": "동료(이도현, 확인 카드 승인 후)" if r["actor"] == "COLLEAGUE" else "지원자",
+                                     "chars_before": len(before), "chars_after": len(after), "after_preview": after[:200]})
+        prev = dict(r["sections"] or {})
+    authorship = {}
+    for h in revision_history:
+        a = authorship.setdefault(h["section"], {"지원자": 0, "동료": 0, "last": None})
+        a["동료" if h["actor"].startswith("동료") else "지원자"] += 1
+        a["last"] = h["actor"]
+    task_reviews = [{"at": at(rv["created_at"]), "section": SEC_TITLE.get(tasks.get(rv["entity_id"], {}).get("template_key"), "-"),
+                     "decision": rv["payload"].get("decision"), "comment": rv["payload"].get("comment", "")} for rv in reviews]
+    stats = {"colleague_requests": len(colleague_requests), "assistant_questions": len(assistant_log),
+             "cards": len(card_decisions), "cards_approved": sum(1 for x in card_decisions if x["status"] in ("APPROVED", "APPLIED")),
+             "cards_rejected": sum(1 for x in card_decisions if x["decision"] == "REJECT"),
+             "cards_revise": sum(1 for x in card_decisions if x["decision"] == "REVISE"),
+             "revisions_by_candidate": sum(1 for h in revision_history if h["actor"] == "지원자"),
+             "revisions_by_colleague": sum(1 for h in revision_history if h["actor"].startswith("동료"))}
+    obs = []
+    obs.append({"area": "협업", "source": "RULES", "text": f"동료에게 {stats['colleague_requests']}건 요청했고, 확인 카드 {stats['cards']}건 중 승인 {stats['cards_approved']}·"
+                f"거절 {stats['cards_rejected']}·재수정 요청 {stats['cards_revise']}건을 결정한 것을 확인함", "at": None, "quote": None})
+    obs.append({"area": "작성", "source": "RULES", "text": f"기획안 수정 이력 중 지원자 직접 수정 {stats['revisions_by_candidate']}회, "
+                f"동료 초안 반영 {stats['revisions_by_colleague']}회를 확인함", "at": None, "quote": None})
+    for x in card_decisions:
+        if x["decision"] == "REVISE" and x["comment"]:
+            obs.append({"area": "협업", "source": "RULES", "text": f"{x['section']} 확인 카드에서 검토 사항을 남기고 재수정을 요청한 것을 확인함",
+                        "at": x["at"], "quote": x["comment"][:200]})
+    for t in task_reviews:
+        if t["comment"]:
+            obs.append({"area": "협업", "source": "RULES", "text": f"{t['section']} 태스크 검토({t['decision']})에서 의견을 남긴 것을 확인함",
+                        "at": t["at"], "quote": t["comment"][:200]})
+    obs.append({"area": "AI 활용", "source": "RULES", "text": f"AI 어시스턴트에 {stats['assistant_questions']}건 질문한 것을 확인함(사용량만으로 평가하지 않음)",
+                "at": None, "quote": None})
+    return {"raw": {"stats": stats, "observations": obs, "colleague_requests": colleague_requests, "card_decisions": card_decisions,
+                    "task_reviews": task_reviews, "revision_history": revision_history, "section_authorship": authorship,
+                    "assistant_log": assistant_log}}
