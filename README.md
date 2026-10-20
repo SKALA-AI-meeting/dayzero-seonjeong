@@ -52,7 +52,20 @@ uv run python -m scripts.smoke_flow --mode fixture   # agent 모드와 일치시
 
 시험은 실제 2시간 기준으로 진행되며 이벤트(00:10 업무 분담 ~ 02:00 자동 제출)는 서버 시계로 발생합니다. 시연할 때는 관리자 세션 목록의 "시연: 이벤트로 이동" 메뉴로 다음 이벤트 시각으로 건너뛸 수 있습니다(`APP_ENV=development`에서만 표시, 지원자 화면에는 노출되지 않음).
 
-Docker Compose 실행(`compose.yaml`)은 아직 작성 전입니다(M5).
+Docker Compose(`compose.yaml`, `services/Dockerfile`, `frontend/Dockerfile`)는 작성했지만 컨테이너 빌드·기동은 아직 검증하지 않았습니다. 검증된 실행 방법은 위의 로컬 실행입니다.
+
+```bash
+# (미검증) Compose
+cp .env.example .env   # 비밀값 설정
+docker compose up -d db && docker compose run --rm gateway uv run alembic upgrade head
+docker compose run --rm gateway uv run python -m scripts.seed
+docker compose --profile tools run --rm indexer
+docker compose up -d
+```
+
+## 검증 상태
+
+AT-01~AT-17 판정과 근거는 [evidence/verification.md](evidence/verification.md)에 있습니다(PASS 13 / PARTIAL 4). Harness 8요소 평가: `uv run python -m scripts.eval_harness --suite harness-v1 --label <label>` → `evals/results/`.
 
 ## 근거와 구현 가정
 

@@ -1,0 +1,56 @@
+# Day Zero MVP — 로컬 Compose (AGENT_GUIDE §5). 호스트 공개는 web(3100)·gateway(8000)만.
+# 주의: 이 파일은 작성만 했고 컨테이너 빌드·기동은 아직 검증하지 않았다(evidence/verification.md).
+x-py: &py
+  build: { context: ., dockerfile: services/Dockerfile }
+  env_file: .env
+  restart: unless-stopped
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment: { POSTGRES_USER: dayzero, POSTGRES_PASSWORD: local_demo_only, POSTGRES_DB: dayzero }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U dayzero"], interval: 3s, retries: 20 }
+  gateway:
+    <<: *py
+    command: uv run uvicorn gateway.app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+psycopg://dayzero:local_demo_only@db:5432/dayzero
+      AGENT_INTERNAL_URL: http://agent:8001
+      GATEWAY_INTERNAL_URL: http://gateway:8000
+    ports: ["8000:8000"]
+    depends_on: { db: { condition: service_healthy } }
+  agent:
+    <<: *py
+    command: uv run uvicorn agent.app.main:app --host 0.0.0.0 --port 8001
+    environment:
+      DATABASE_URL: ""   # agent는 업무 DB DSN을 받지 않음(checkpoint 전용 role만)
+      CHECKPOINT_DATABASE_URL: postgresql://dayzero_checkpoint:local_demo_only@db:5432/dayzero
+      GATEWAY_INTERNAL_URL: http://gateway:8000
+      BUSINESS_MCP_URL: http://business-mcp:9101/mcp
+      RAG_MCP_URL: http://rag-mcp:9102/mcp
+    depends_on: [gateway, business-mcp, rag-mcp]
+  business-mcp:
+    <<: *py
+    command: uv run python -m business_mcp.server
+    environment: { DATABASE_URL: "", GATEWAY_INTERNAL_URL: http://gateway:8000 }
+  rag-mcp:
+    <<: *py
+    command: uv run python -m rag_mcp.server
+    environment:
+      DATABASE_URL: ""
+      RAG_DATABASE_URL: postgresql://dayzero_rag:local_demo_only@db:5432/dayzero
+    volumes: [hfcache:/app/.cache/hf]
+  indexer:
+    <<: *py
+    profiles: [tools]
+    restart: "no"
+    command: uv run python -m scripts.index_documents --scenario moarun-rejoin-v1
+    environment:
+      INDEXER_DATABASE_URL: postgresql://dayzero_indexer:local_demo_only@db:5432/dayzero
+    volumes: [hfcache:/app/.cache/hf]
+  web:
+    build: { context: ., dockerfile: frontend/Dockerfile }
+    environment: { GATEWAY_INTERNAL_URL: http://gateway:8000 }
+    ports: ["3100:3100"]
+    depends_on: [gateway]
+volumes: { pgdata: {}, hfcache: {} }
