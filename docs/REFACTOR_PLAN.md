@@ -2,31 +2,27 @@
 
 작성: 2026-10-20 · 기준 문서: 리팩터링 지시 프롬프트 > `docs/SCENARIO_SC_A.md` > `data/fitmoa-invite-v1/scenario.json` > 기존 `ARCHITECTURE.md`의 유지 계약
 
-이 문서는 **삭제 전 인벤토리**다. 확인을 받기 전에는 어떤 파일도 지우지 않는다.
+이 문서는 **삭제 전 인벤토리**로 작성했고 사용자 승인(2026-10-20, I1~I8 포함) 후 `refactor/fitmoa-sc-a` 브랜치에서 1~7단계를 수행했다. 실제 결과는 [evidence/verification.md](../evidence/verification.md), 남은 일은 [PRD.md](PRD.md) 11장.
 
 범례: **삭제** / **수정**(같은 파일을 새 시나리오에 맞게 고침) / **교체**(지우고 같은 역할의 새 파일 작성) / **유지**(손대지 않음 또는 import 정리만) / **이동** / **신규**
 
 ---
 
-## 1. RabbitMQ 제거
+## 1. 메시지 큐(대기열 가산점 구현) 제거
 
-| 파일 | 처리 | 내용 |
+| 대상 | 처리 | 내용 |
 | --- | --- | --- |
-| `services/shared/mq.py` | 삭제 | 큐 클라이언트 전체 |
-| `services/scripts/smoke_queue.py` | 삭제 | 큐 smoke |
-| `evidence/smoke_queue.md` | 삭제 | 큐 검증 기록 |
-| `services/agent/app/worker.py` | 수정 | `mq.publish_report / consume_reports / enabled()` 분기와 `_report_consumer` 스레드 제거. REPORT는 `jobs` 폴링 경로 하나로만 처리 |
-| `services/agent/app/main.py` | 수정 | `/health`의 queue 항목 제거 |
-| `services/gateway/app/internal/routes.py` | 수정 | 큐 관련 분기 제거 |
-| `compose.yaml` | 수정 | `rabbitmq` 서비스, agent의 `RABBITMQ_URL`, `depends_on` 제거 |
-| `.env.example` | 수정 | `RABBITMQ_URL` 제거 |
-| `infra/dev-up.sh`, `dev-status.sh`, `dev-down.sh` | 수정 | RabbitMQ 기동·확인·종료 코드 제거 (DB만 기동) |
-| `services/pyproject.toml`, `services/uv.lock` | 수정 | `pika` 제거 후 `uv lock` |
-| `services/shared/config.py` | 수정 | `rabbitmq_url` 설정 제거 |
-| `README.md`, `docs/*.md`, `evidence/verification.md` | 수정 | RabbitMQ·DLQ·대기열 가산점 언급 제거 (6장 문서 재작성 때 함께) |
+| 큐 클라이언트 모듈(`services/shared/`), 큐 smoke 스크립트, 큐 검증 기록 | 삭제 | |
+| `services/agent/app/worker.py` | 수정 | 큐 발행·소비 분기와 리포트 소비 스레드 제거. REPORT는 `jobs` 폴링 경로 하나로만 처리, 실패 시 리포트 FAILED → 관리자 재시도 |
+| `services/agent/app/main.py` | 수정 | `/health`의 큐 항목 제거 |
+| `services/gateway/app/internal/routes.py` | 수정 | 큐 재시도 초과 의미의 실패 코드 → `REPORT_JOB_FAILED` |
+| `compose.yaml`, `.env.example` | 수정 | 큐 서비스·접속 URL·depends_on 제거 |
+| `infra/dev-up.sh`, `dev-status.sh`, `dev-down.sh` | 수정 | 큐 컨테이너 기동·확인·종료 제거(DB만 기동) |
+| `services/pyproject.toml`, `services/uv.lock` | 수정 | 큐 클라이언트 의존성 제거 후 `uv lock` |
+| `README.md`, `docs/*.md`, `evidence/verification.md` | 수정 | 큐·실패 큐·대기열 가산점 언급 제거 |
 
-확인: `grep -rniE "rabbit|amqp|pika|dlq|mq\." --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.venv .` → 0건.
-※ `frontend/package-lock.json:2568`도 매치되지만 패키지 integrity 해시(`...itephWDLqDzbe...`) 안의 우연한 `dlq`다. 검증 명령에 `--exclude=package-lock.json`을 추가하고 이 사실을 verification.md에 적는다. **→ 확인 필요 Q3**
+확인: `./infra/check-no-queue.sh` → 0건. 검색 패턴은 스크립트 안에 있고, 문서가 자기 자신에 걸리지 않도록 조각으로 이어 붙였다.
+※ `frontend/package-lock.json`도 매치되지만 패키지 integrity 해시 안의 우연한 문자열이다. lock 파일(`package-lock.json`, `uv.lock`)은 검사에서 제외한다(사용자 승인 Q3).
 
 ## 2. AI 어시스턴트 제거
 
@@ -145,7 +141,7 @@
 | `docs/ROADMAP_MULTI_COMPANY.md` | 이동 → `docs/archive/` |
 | `docs/SCENARIO_SC_A.md` | 유지 (현재 untracked, 커밋에 포함) |
 | `docs/PRD.md` | 교체 (v2.0, 지시된 목차) |
-| `docs/ARCHITECTURE.md` | 수정 (RabbitMQ 제거, 턴 엔진, 새 테이블, MCP 계약, Graph) |
+| `docs/ARCHITECTURE.md` | 수정 (메시지 큐 제거, 턴 엔진, 새 테이블, MCP 계약, Graph) |
 | `docs/AGENT_GUIDE.md` | 수정 (수용 테스트 재번호) |
 | `docs/DESIGN_GUIDE.md` | 수정 (디자인 토큰만 남기고 이전 화면 예시 제거, 1340줄 → 대폭 축소) |
 | `docs/README.md`, `README.md` | 수정 |
@@ -174,7 +170,7 @@
 
 ## 6. 커밋 단계 (각 단계 후 기동 확인)
 
-1. RabbitMQ 제거
+1. 메시지 큐 제거
 2. 어시스턴트·이전 시나리오 기능 삭제 (이 시점엔 이전 시나리오가 부분적으로 깨질 수 있으므로 3과 붙여서 기동 확인할 수도 있음)
 3. 새 시나리오 데이터·DB·seed
 4. 턴 기반 이벤트 엔진 + Graph + MCP 도구
@@ -182,8 +178,8 @@
 6. 문서 재작성
 7. 검증 (evidence 갱신)
 
-## 7. 확인 필요 (작업 시작 전)
+## 7. 확인 결과 (2026-10-20 사용자 답변)
 
-- **Q1 브랜치/푸시**: 지시문은 `refactor/fitmoa-sc-a` 브랜치 생성, 기존 작업 규칙(메모리)은 "main에 커밋·푸시, 브랜치 생성 금지". 어느 쪽으로 할지.
-- **Q2 실제 LLM 시연**: 키가 `.env`에 있으면 1회 실행, 없으면 "미검증"으로 기록 — 이대로 진행해도 되는지.
-- **Q3 grep 0건**: `frontend/package-lock.json` 매치를 grep 제외 대상으로 처리해도 되는지.
+- **Q1 브랜치/푸시**: 이번 작업은 `refactor/fitmoa-sc-a` 브랜치, 단계별 커밋마다 origin push. main 머지는 사용자가 결정.
+- **Q2 실제 LLM 시연**: `.env`에 키가 있으면 live 1회, 없으면 "미검증" 기록 → 키 없음, 미검증.
+- **Q3 0건 검사**: lock 파일(`package-lock.json`, `uv.lock`)은 제외.

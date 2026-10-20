@@ -1,311 +1,232 @@
-# Day Zero 개인 MVP — 아키텍처 및 계약 v1.3
+# Day Zero 개인 MVP — 아키텍처 및 계약 v2.0
 
-기준: PRD v1.3, 2026-10-20 16:30 KST. v1.3은 시나리오 교체(`DAYZERO_EXAM_SCENARIO.md`, moarun-rejoin-v1)에 따라 시나리오에 묶인 식별자(지표 테이블·MCP 도구·섹션·이벤트·분담 API)만 바꿨으며 서비스 경계·인증·SSE·승인·Harness 계약은 그대로다. 공식 교안 표 5-4~6/6-3/6-13/6-14 및 사용자 디자인·포트 지정 반영. 아래 이름·타입·오류 코드는 구현 계약이다. 현재는 설계 문서이며 파일/명령의 구현 완료를 뜻하지 않는다.
+기준: [PRD.md](PRD.md) v2.0, [SCENARIO_SC_A.md](SCENARIO_SC_A.md), `data/fitmoa-invite-v1/scenario.json`. v1.3(모아런, 시간 이벤트, 어시스턴트, 대기열)에서 서비스 경계·인증·SSE·승인·Harness·DB job 계약은 유지하고, 시나리오 엔진(턴 기반), 데이터 모델, MCP 도구, Graph를 교체했다. 아래 이름·타입·오류 코드는 현재 코드와 일치하는 구현 계약이다.
 
 ## 1. 배치와 책임
 
 ```text
-Browser → web :3100 → gateway :8000 → agent :8001
-                       ↑                ├→ business-mcp :9101/mcp → gateway /internal/**
-                       │                └→ rag-mcp :9102/mcp → pgvector chunk index (read-only)
-                       └──────── PostgreSQL :5432 ← agent checkpoints/jobs
-                                               ← rag-mcp read-only document role
+Browser → web :3100 → gateway :8000 ──────────────→ PostgreSQL(:5434 호스트) ← agent checkpoints schema
+                       ↑   (업무 DB 쓰기 단독,         ↑ rag role: documents/chunks 읽기 전용
+                       │    턴 엔진·판정·리포트)        │
+                       │                               │
+                agent :8001 (DB job worker, LangGraph)  │
+                       ├→ business-mcp :9101/mcp → gateway /internal/v1/mcp/**   (DB DSN 없음)
+                       └→ rag-mcp :9102/mcp ───────────┘ (pgvector 검색, Resource, Prompt)
 ```
 
-Compose 서비스 이름: `web`, `gateway`, `agent`, `business-mcp`, `rag-mcp`, `db`. P1은 `rabbitmq`, `report-worker`. 호스트 공개는 web/gateway만. web은 `/api/**`를 gateway로 프록시하고 SSE buffering을 끈다. 브라우저는 같은 origin 쿠키를 사용한다. gateway만 업무 데이터 쓰기 권한을 갖는다. agent는 체크포인트 전용 schema와 자기 job 실행용 내부 API만 사용한다. business-mcp에 DB DSN을 주지 않는다. rag-mcp의 DB role은 공개 문서/청크 read-only이며 평가 기준·개입 정책을 조회할 수 없다.
+- Compose 서비스: `web`, `gateway`, `agent`, `business-mcp`, `rag-mcp`, `db`(+ `indexer` tools 프로필). 호스트 공개는 web·gateway만. 로컬 개발은 `./infra/dev-up.sh`가 **DB 컨테이너 하나만** 띄우고 나머지는 프로세스로 실행한다.
+- **gateway만 업무 데이터를 쓴다.** agent는 checkpoint 전용 schema와 내부 API만, business-mcp는 DB DSN 없이 gateway 내부 API로만, rag-mcp는 읽기 전용 role로 공개 문서·청크만 읽는다.
+- **DB job worker:** gateway가 `jobs`에 AGENT/REPORT 작업을 기록하고 즉시 202를 반환한다. agent가 1초 간격으로 claim(`FOR UPDATE SKIP LOCKED`, lease 150초, 세션당 lease 1개)해 실행한다. 리포트도 이 경로 하나로 처리한다(메시지 브로커 없음).
+- **턴 기반 이벤트 엔진**(`gateway/app/engine.py`)은 gateway 트랜잭션 안에서 돈다. 별도 타이머·tick 스레드가 없다.
+- 스택: Next.js 15.5(App Router, React 19) · Python 3.11 / FastAPI / psycopg 3 / Alembic · LangGraph 1.2 + langgraph-checkpoint-postgres · MCP Python SDK(Streamable HTTP) · PostgreSQL 17 + pgvector · 로컬 임베딩 `paraphrase-multilingual-MiniLM-L12-v2`(384차원) · LLM `gpt-4o-mini`(live 모드). `LLM_MODE=fixture`면 LLM 없이 결정적으로 동작한다.
 
-web은 컨테이너 내부도 3100에 bind하고 Compose는 `3100:3100`으로 매핑한다. APP_ORIGIN은 `http://localhost:3100`이다. 프록시의 gateway 내부 주소는 `http://gateway:8000`이며 브라우저 API/SSE는 web의 동일 origin을 사용한다. CSRF/Origin 허용 목록과 브라우저 테스트 base URL은 APP_ORIGIN에서 읽는다. Next.js dev/start 모두 명시적으로 포트를 지정하고 프레임워크의 기본값에 의존하지 않는다.
+## 2. 식별자와 공통 타입
 
-디자인 토큰의 기준은 PRD 6.1이다. `frontend/src/styles/tokens.css`에 `--color-primary`, `--color-primary-hover`, `--color-primary-soft`, `--color-heading`, `--color-body`, `--color-muted`, `--color-background`, `--color-surface`, `--color-border`, `--color-success`, `--color-info`, `--color-warning`, `--color-error`, `--color-on-primary`를 정의한다. 버튼/카드/입력/상태 컴포넌트가 이를 공유하며 화면별 임의 팔레트를 추가하지 않는다. on-primary는 #111827이고 코랄 버튼에 흰 글자를 적용하지 않는다. gradient는 제외하고 panel은 border 중심으로 구분한다.
-
-실행 비용을 줄이기 위해 agent가 세션/리포트 job executor를 겸한다. gateway는 DB jobs에 작업을 기록하고 즉시 202를 반환한다. agent는 1초마다 내부 claim API로 job을 얻어 실행한다. P0 단일 agent worker, 세션당 동시 run 1개. 인메모리 BackgroundTasks만으로 내구성 요구를 충족했다고 보지 않는다.
-
-빈 저장소 기본 스택은 Next.js 15.5 App Router/React 19.1/TypeScript 5, Python 3.11.9/FastAPI 0.150/Pydantic 2/SQLAlchemy 2/Alembic/LangGraph 1.2(langgraph-checkpoint-postgres 3.2), mcp 2.3, sentence-transformers 6.1, PostgreSQL 17(pgvector/pgvector:pg17 이미지). 버전은 구현 환경(Node 26.7, uv 0.11)에서 설치 가능한 조합으로 확정했다. 정확한 라이브러리 버전은 첫 실행 성공 조합을 lockfile에 고정한다. MCP는 공식 Python SDK의 Streamable HTTP를 사용하고 설치 버전의 서버/클라이언트 API를 확인한다. 최신 SDK의 import 이름을 과거 FastMCP 예제와 혼합하지 않는다. `gpt-4o-mini`는 기존 자료의 모델 제약으로 설정값에 고정한다.
-
-교안 53쪽 레퍼런스는 Vue 3/Vite, Spring Boot 3, FastAPI·LangGraph 1.x·LangChain 1.x, FastMCP 4.1/mcp 2.x, Chroma 또는 pgvector, PostgreSQL 16이다. 이 패키지는 UI/업무 서버 프레임워크를 마감용 개인 구현 가정으로 바꾸지만 계층 책임은 그대로 유지한다. 프레임워크 선택까지 공식 허용받았다는 의미는 아니다. Agent의 ‘DB 직접 쓰기 금지’는 업무 데이터에 적용하고 checkpointer의 전용 schema 저장만 허용한다(교안 64쪽은 agent checkpointer의 DB 접근을 명시).
-
-P0 오프라인 색인 경로: `회사 자료 5개 → 모델 토큰 기준 청크 → local embedding → pgvector`. 온라인 경로: `질문 → 같은 모델의 embedding → cosine top-k → 출처 청크 → 필요시 Resource 원문 열람`. 로컬 모델은 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`(384차원)를 구현 가정으로 선택한다. CPU 사용, 정규화 벡터, 모델 revision을 색인 metadata에 고정한다. LLM API 모델 제한과 별도인 로컬 임베딩이며 추가 유료 API를 만들지 않는다. 첫 다운로드/색인은 질문 처리 전에 완료하고 검색 중 자동 다운로드하지 않는다.
-
-## 2. 공통 타입/식별자
-
-업무 ID는 UUID 문자열. 문서/시나리오/이벤트 seed ID는 사람이 읽는 문자열. 타임스탬프는 UTC ISO 8601, 화면은 Asia/Seoul. SQL은 `timestamptz`, JSON 필드는 `jsonb`. 요청 객체는 추가 필드를 거절한다. 문자열 길이·배열 크기는 서버에서 검사한다.
+- 업무 ID는 UUID, seed ID는 사람이 읽는 문자열. 타임스탬프는 UTC `timestamptz`, 화면은 Asia/Seoul. 요청 객체는 추가 필드를 거절한다(422).
+- **시나리오 ID 매핑:** DB·데이터 폴더 `fitmoa-invite-v1` ↔ JSON `scenario_id`·문서 URI `sc-a` (`shared/config.py` `SCENARIO_ALIASES`).
+- 산출물 key: `T1` 안내문, `T2` FAQ 5개(서윤 초안 2개에서 시작), `T3` 리워드·일정 표(서윤 초안), `T5` 푸시 문구(E2에서 생성), `T4` 팀장 보고(E4에서 생성).
+- 공유 문서 id: `brief`, `reward-table`, `faq-draft`, `tone-guide` (PUBLIC), `criteria` (INTERNAL, 코드북).
 
 ```ts
 type SessionStatus = 'CREATED'|'ACTIVE'|'SUBMITTED';
-type Phase = 'BRIEF'|'WORK'|'REVIEW'|'CLOSED';
+type Phase = 'BRIEF'|'WORK'|'CLOSED';
 type RunStatus = 'QUEUED'|'RUNNING'|'WAITING_APPROVAL'|'SUCCEEDED'|'FAILED'|'CANCELLED';
-type TaskStatus = 'TODO'|'IN_PROGRESS'|'REVIEW'|'DONE'|'CANCELLED';
-type Role = 'ADMIN'|'CANDIDATE';
-type Channel = 'TEAM'|'ASSISTANT';
-type Actor = 'CANDIDATE'|'COLLEAGUE'|'MANAGER'|'ASSISTANT'|'SYSTEM';
+type TaskStatus = 'TODO'|'IN_PROGRESS'|'DONE';
+type Owner = 'UNASSIGNED'|'CANDIDATE'|'COLLEAGUE'|'SPLIT';
+type Actor = 'CANDIDATE'|'COLLEAGUE'|'MANAGER'|'SYSTEM';
+type Competency = 'RESPONSIBILITY'|'PLANNING'|'ADAPTABILITY'|'COLLABORATION'|'HONESTY';
 type ErrorBody = {error:{code:string;message:string;retryable:boolean;trace_id:string}};
-type Citation = {document_id:string;chunk_id:string;version:number;quote:string};
-type EvidenceRef = {
-  kind:'message'|'artifact_revision'|'action'|'tool_call'; id:string;
-  field:string; start:number|null; end:number|null; quote:string|null
-};
+type EvidenceRef = {kind:'message'|'revision'|'action'|'task'|'artifact'|'event'; id:string};
 ```
 
-문자 인용 구간은 Unicode code point 기준, 0부터 시작하고 end는 제외한다. 언어 사이에 같은 기준을 적용하며 UI의 UTF-16 index를 그대로 보내지 않는다. 인용이 없는 조작 근거는 start/end/quote를 null로 둔다.
+## 3. 저장 스키마 (`gateway/app/schema.sql`, alembic `0001_fitmoa_initial`)
 
-## 3. 저장 스키마
+데모 DB라 이전 마이그레이션을 하나로 합쳤고 데이터는 보존하지 않는다. 기존 DB는 `./infra/dev-reset-db.sh`로 비운 뒤 적용한다.
 
-세션에 종속된 행은 `session_id`를 가지며 gateway가 소속 company와 participant를 다시 확인한다. 요청 본문에 들어 있는 company_id나 actor/role을 인증 근거로 신뢰하지 않는다.
-
-| 테이블 | 필수 열·제약 |
+| 테이블 | 핵심 열·제약 |
 |---|---|
-| companies | id UUID PK, name text |
-| users | id UUID PK, company_id FK, email unique, password_hash text, role ADMIN |
-| invites | id UUID PK, company_id FK, alias text, token_hash unique, expires_at, consumed_at nullable, session_id nullable unique |
-| participants | id UUID PK, company_id FK, alias text, session_id unique FK |
-| scenarios | id text PK, version int, title text, public_brief jsonb, policy_version text. P0 seed만 허용 |
-| sessions | id UUID PK, company_id FK, participant_id FK, scenario_id FK, scenario_version int, status, phase, consent_at nullable, started_at nullable, submitted_at nullable, version int default 1, last_action_seq bigint default 0, last_stream_seq bigint default 0, auto_intervention_count int default 0, policy_state jsonb default {} |
-| messages | id UUID PK, session_id FK, channel, actor, content text max 8000, citations jsonb default [], source_run_id nullable, client_message_id nullable, created_at. unique(session_id,client_message_id) |
-| artifacts | id UUID PK, session_id unique FK, sections jsonb (5 sections), version int default 1 |
-| artifact_revisions | id UUID PK, session_id FK, artifact_id FK, version int, sections jsonb, changed_sections jsonb, actor, run_id nullable, created_at. unique(artifact_id,version) |
-| tasks | id UUID PK, session_id FK, title text max 160, status, owner CANDIDATE/COLLEAGUE, target_section nullable, delegation_id nullable, result jsonb nullable, version int |
-| delegations | id UUID PK, session_id FK, task_id FK, source_message_id FK, tool_allowlist jsonb, section_allowlist jsonb, constraints jsonb, expires_at, revoked_at nullable, version int |
-| runs | id UUID PK, session_id FK, thread_id text unique, kind COLLEAGUE/ASSISTANT/DELEGATED/REPORT, status, source_message_id nullable, task_id nullable, input jsonb, result jsonb nullable, policy_version text, prompt_version text, trace_id text, trace_url nullable, token_usage jsonb, estimated_cost nullable, pricing_version nullable, error_code nullable, created_at, updated_at |
-| approvals | id UUID PK, session_id FK, run_id FK, interrupt_id text, tool_name text, args jsonb, args_hash text, base_versions jsonb, delegation_id nullable, status PENDING/APPROVED/REJECTED/EXPIRED/APPLIED, expires_at, decided_at nullable, decision_actor_id nullable. unique(run_id,interrupt_id) |
-| mutation_receipts | operation_id text PK, session_id FK, approval_id FK unique, result jsonb, applied_at |
-| documents | id text PK, scenario_id FK, version int, title, body text, visibility PUBLIC, checksum text, available_after_min int(시험 시계 기준 공개 시각, 인터뷰 65) |
-| document_chunks | id text PK, document_id FK, document_version int, ordinal int, body text, keywords jsonb, embedding vector(384), embedding_model text, embedding_revision text, embedding_dimension int CHECK(embedding_dimension=384), index_version text. unique(document_id,document_version,ordinal,index_version) |
-| rejoin_facts | scenario_id FK, dataset_version text, group_size small/medium/large, first_time_participants int, rejoined_within_30d int. PK(scenario_id,dataset_version,group_size), CHECK(0≤rejoined≤first_time) |
-| interview_notes | id text PK, scenario_id FK, group_size text, tags jsonb, quote text |
-| scenario_events | id text PK, policy_version, predicate_key(이벤트 kind), payload jsonb(고정 메시지·관찰 영역), priority int, at_min int(00:00 기준 발생 분) |
-| event_occurrences | id UUID PK, session_id FK, event_id FK, trigger_action_seq bigint, facts jsonb, response_message_id nullable, occurred_at_min numeric, created_at. unique(session_id,event_id) |
-| actions | id UUID PK, session_id FK, seq bigint, actor, kind text, entity_id text nullable, payload jsonb, created_at. unique(session_id,seq) |
-| tool_calls | id UUID PK, session_id FK, run_id FK, tool_name, safe_args jsonb, result_summary jsonb, citations jsonb, help_id text, policy_version, outcome, duration_ms, created_at |
-| reports | id UUID PK, session_id unique FK, status PENDING/RUNNING/READY/FAILED, version int, source_snapshot jsonb, body jsonb nullable, attempts int default 0, error_code nullable |
-| jobs | id UUID PK, session_id FK, run_id nullable unique FK, dedupe_key text unique, kind AGENT/REPORT, input jsonb, status QUEUED/LEASED/DONE/FAILED, attempt int, available_at, lease_until nullable, last_error nullable |
-| stream_events | id UUID PK, session_id FK, seq bigint, run_id nullable, type text, public_payload jsonb, admin_payload jsonb nullable, created_at. unique(session_id,seq) |
+| companies / users / invites / participants | 인증(4장). invites는 token_hash unique, 72시간 만료, 1회 소모 |
+| scenarios | id, scenario_key(`sc-a`), definition jsonb(scenario.json 전체, 정답 포함 — 지원자 API로 내보내지 않음), fixes jsonb(서윤 수정 규칙) |
+| sessions | status, phase, **turn_count**, **virtual_time**, **scenario_state** jsonb(active_event, awaiting, colleague{offline,offline_replies_left}, pushback{E0,E2}, pushback_pending, e2_asked_colleague, e2_reminded, e2b_accepted, split, e4, manager_answered, report_flags), last_action_seq, last_stream_seq |
+| messages | channel=TEAM, actor, content ≤8000, meta(kind: SCENARIO_EVENT / SCENARIO_BRANCH / REMINDER / SPLIT_CONFIRMED / STATUS, event_id, label, to), turn |
+| artifacts | (session_id, key) unique, title, body, initial_body, version |
+| artifact_revisions | body_before, body_after(diff 원천), actor CANDIDATE/COLLEAGUE/SYSTEM, run_id, turn, meta(targets, approval_id) |
+| tasks | (session_id, key) unique, status, owner, eta, note, version |
+| runs | kind TEAM/REPORT, thread_id unique, input(type: message/split, to, event_id, turn, action_id), prompt_version, trace_id, token_usage |
+| approvals / mutation_receipts | interrupt 승인(run_id, interrupt_id unique), args_hash, base_versions{artifact_version}, before_after, 15분 만료 / 적용 영수증(중복 적용 방지) |
+| documents / document_chunks | visibility PUBLIC/INTERNAL, ordinal / vector(384), embedding_model·revision, index_version |
+| event_occurrences | (session_id, event_id) unique — 세션당 1회. turn, virtual_time, skipped, facts(reason) |
+| actions | seq, actor, kind(MESSAGE_SENT, TASK_UPDATED, ARTIFACT_SAVED, SPLIT_PROPOSED, APPROVAL_DECIDED, DOCUMENT_OPENED, EVENT_TRIGGERED, BRANCH, REFLECTION …), turn |
+| **observations** | code, competency, event_id, subject(PE-1…, E2-CHANGE, 약속 id), evidence_ref, note, source AGENT/RULES, run_id. unique(session, code, event_id, subject) — 같은 코드는 1회 |
+| **commitments** | message_id unique, text, event_id, registered_turn, status OPEN/KEPT/BROKEN, resolution |
+| tool_calls / reports / jobs / stream_events | 도구 로그 / 리포트(PENDING·READY·FAILED) / DB job / SSE 재생용 이벤트(admin_payload 분리) |
 
-LangGraph checkpoint는 공식 PostgreSQL saver의 전용 `checkpoints` schema를 사용한다. 독자적인 JSON 저장만으로 interrupt 재개를 흉내 내지 않는다. 인용 보존을 위해 messages/revisions는 immutable로 관리한다. pgvector extension과 vector(384) 열은 P0 migration에 포함한다. 데이터가 작으므로 ANN 인덱스 튜닝은 제외하고 exact cosine search를 사용한다. sessions↔participants와 tasks↔delegations의 순환 FK는 지연 검사(DEFERRABLE INITIALLY DEFERRED)로 같은 transaction에서 생성하거나 한쪽을 nullable로 두고 commit 전 연결한다. seed는 FK 제약을 끄지 않는다.
-
-업무 트랜잭션에서 상태 변경·action·SSE event·job 생성을 함께 commit한다. `actions.seq`와 `stream_events.seq`는 서로 다른 카운터이며 session row lock으로 각각 증가시킨다. phase/status/version/seq는 원자적으로 갱신한다. 리스트 API는 최신 100개와 cursor를 반환한다. 서버는 기획안 본문 합계 40,000자, 검색 query 200자, 청크당 1,500자, 결과 최대 5개로 제한한다.
+최소 권한 role: `dayzero_rag`(documents·chunks SELECT), `dayzero_indexer`(chunks 쓰기), `dayzero_checkpoint`(checkpoints schema). 상태 변경·action·SSE 이벤트·job 생성은 한 트랜잭션에 commit한다.
 
 ## 4. 인증과 실행 주체
 
-관리자: seed 이메일/비밀번호 로그인, Argon2id 등 검증된 해시 사용. 지원자: 32바이트 난수 초대 토큰의 해시만 DB에 저장하고 만료 72시간. 원문은 생성 응답에서 1회만 반환. 교환 트랜잭션에서 token row lock/consumed_at 검사 후 participant/session을 한 번 생성한다. 브라우저는 HttpOnly SameSite=Lax 쿠키 JWT를 받으며 새로고침은 이 쿠키로 이어간다. 초대 원문 재사용은 409, 만료는 410. 현재 브라우저에서 이미 교환한 쿠키가 있으면 해당 세션으로 이동한다.
+관리자: seed 이메일/비밀번호 로그인, Argon2id 해시. 지원자: 32바이트 난수 초대 토큰의 해시만 DB에 저장하고 만료 72시간. 원문은 생성 응답에서 1회만 반환. 교환 트랜잭션에서 token row lock/consumed_at 검사 후 participant/session을 한 번 생성한다. 브라우저는 HttpOnly SameSite=Lax 쿠키 JWT를 받으며 새로고침은 이 쿠키로 이어간다. 초대 원문 재사용은 409, 만료는 410. 현재 브라우저에서 이미 교환한 쿠키가 있으면 해당 세션으로 이동한다.
 
-JWT claim: `sub`, `role`, `company_id`, candidate의 `session_id`, `exp`, `jti`. 기본 TTL 8시간. 로그아웃은 쿠키 제거. P0는 같은 브라우저 쿠키 재접속, 다른 기기 복구는 제외한다. 모든 변경 요청에 Origin 검사와 CSRF token을 적용한다. 쿠키는 HTTPS에서 Secure, 로컬 http에서만 development 예외. GET SSE는 credential 쿠키를 사용하고 URL에 토큰을 넣지 않는다.
+JWT claim: `sub`, `role`, `company_id`, candidate의 `session_id`, `exp`, `jti`. 기본 TTL 8시간. 모든 변경 요청에 Origin 검사와 CSRF token을 적용한다. 타인 세션은 404로 보인다. 종료 후 지원자는 세션·문서·SSE를 다시 볼 수 없다(403 SESSION_CLOSED), 디브리핑만 가능.
 
-내부 통신은 서비스 인증 + gateway가 발급한 짧은 scoped capability를 사용한다. claim에는 audience, session_id, run_id, actor, allowed_tools, delegation_id, expiry(최대 120초)를 담는다. capability는 모델 context에 넣지 않는다. MCP 서버가 capability를 검증하고 호출 컨텍스트를 주입한다. body에 session_id가 있으면 claim과 일치해야 한다. business-mcp → gateway도 이 범위를 전달한다. report/observer는 별도 service actor로 public colleague 도구 목록과 분리한다.
+내부 통신은 서비스 토큰 + gateway가 발급한 짧은 scoped **capability**(audience, session_id, run_id, actor, allowed_tools, 최대 120초)를 사용한다. capability는 모델 context에 넣지 않는다. 변경 도구는 승인 시 approval_id가 묶인 capability로만 허용된다. 모델 입력의 session_id가 claim과 다르면 거절한다.
 
-## 5. 공개 HTTP API
-
-기본 `/api/v1`. 아래 객체는 필수 필드만 표시했으며 공통 success는 지정한 본문 그대로다. 202 결과는 `run_id` 또는 `report_id`로 추적한다.
+## 5. 공개 HTTP API (`/api/v1`)
 
 | Method / path | 요청 | 응답 / 권한 |
 |---|---|---|
-| POST `/auth/login` | `{email,password}` | 200 `{user:{id,role},csrf_token}` + 쿠키 / 공개 |
-| POST `/auth/exchange` | `{token}` | 200 `{session_id,csrf_token}` + 쿠키 / 공개 |
-| POST `/auth/logout` | `{}` | 204 / 로그인 |
-| GET `/auth/me` | 없음 | 200 `{id,role,session_id?,csrf_token}` |
+| POST `/auth/login` · `/auth/exchange` · `/auth/logout` · GET `/auth/me` | | 인증(4장) |
 | POST `/invites` | `{alias}` | 201 `{invite_id,invite_url,expires_at}` / ADMIN |
-| GET `/sessions` | `cursor?` | 200 `{items:[{id,alias,status,report_status}],next_cursor}` / ADMIN |
-| GET `/sessions/{sid}` | 없음 | 200 `{session,artifact,tasks,messages,active_run,approvals}` / 소유자 |
-| POST `/sessions/{sid}/start` | `{consent:true}` | 200 `{session}`; 중복 start는 기존 응답 / CANDIDATE |
-| POST `/sessions/{sid}/messages` | `{client_message_id,channel,content}` | 202 `{message_id,run_id}` / CANDIDATE |
-| GET `/sessions/{sid}/documents` | 없음 | 200 `{items:[{id,title,version}]}` / 소유자 |
-| GET `/sessions/{sid}/documents/{docId}` | 없음 | 200 `{id,title,version,body}` + 열람 action / 소유자 |
-| PATCH `/sessions/{sid}/artifact` | `{base_version,section,content,source_refs:EvidenceRef[]}` | 200 `{artifact}` / CANDIDATE 직접 편집 |
-| POST `/sessions/{sid}/split` | `{decision:'ACCEPT'|'ADJUST',assignments:{section:'CANDIDATE'|'COLLEAGUE'|'JOINT'},comment}` | 200 `{split}`; ADJUST 최대 3회, ACCEPT는 마지막 합의안으로만. 확정 시 태스크 담당 반영, 동료 담당 섹션마다 delegation+DELEGATED run 생성 / CANDIDATE |
-| POST `/sessions/{sid}/demo/advance` | `{to_event}` | 200 `{fired,elapsed_min}`; 시험 시계 offset 이동 후 도래 이벤트 발생. APP_ENV=development 전용, 지원자 화면 비노출 / ADMIN |
-| DELETE `/sessions/{sid}/delegations/{did}` | 없음 | 204, 미실행 승인 폐기·run 취소 / CANDIDATE |
-| PATCH `/sessions/{sid}/tasks/{tid}` | `{base_version,status}` | 200 `{task}` / 자기 담당 CANDIDATE |
-| POST `/sessions/{sid}/tasks/{tid}/review` | `{decision:'ACCEPT'|'REVISE'|'REJECT',comment,source_refs:EvidenceRef[]}` | 200 `{task}` / CANDIDATE |
-| POST `/sessions/{sid}/approvals/{aid}/decision` | `{decision:'APPROVE'|'REJECT'}` | 202 `{run_id,status}` / 해당 세션 CANDIDATE |
-| POST `/sessions/{sid}/submit` | `{base_version,summary}` | 202 `{session_status:'SUBMITTED',report_id}` / CANDIDATE |
-| GET `/sessions/{sid}/events` | `after_seq?` | 200 SSE / 소유자 |
-| GET `/runs/{rid}` | 없음 | 200 `{id,status,error?,result?}` / 소유자 |
-| POST `/runs/{rid}/retry` | `{}` | 202 `{run_id}`; FAILED만 가능, 승인과 변경은 새로 생성 / CANDIDATE |
-| GET `/sessions/{sid}/debrief` | 없음 | 200 `{occurred_events,not_triggered,recording_notice}` / 소유자, 제출 후 |
-| GET `/reports/{sid}` | 없음 | 200 `{status,body?}` / ADMIN |
-| POST `/reports/{sid}/retry` | `{}` | 202 `{report_id}` / ADMIN, FAILED만 |
-| GET `/health` | 없음 | 200 `{status,db,agent,mcp,mode}` / 로컬 점검 |
+| GET `/sessions` | `cursor?` | `{items,demo_enabled,pending_invites}` / ADMIN |
+| GET `/sessions/{sid}` | | `{session,artifacts,tasks,messages,active_run,approvals,brief,clock{virtual_time,start,deadline,turn_count},colleague{offline},events,split}` / 소유자 |
+| POST `/sessions/{sid}/start` | `{consent:true}` | 보드·산출물 생성 + E0 발생. 중복 start는 기존 응답 / CANDIDATE |
+| POST `/sessions/{sid}/messages` | `{client_message_id,channel:'TEAM',content,to:'COLLEAGUE'|'MANAGER'}` | 202 `{message_id,run_id}`, **1턴**. 응답 run 진행 중이면 409 RUN_BUSY / CANDIDATE |
+| POST `/sessions/{sid}/split` | `{proposal:{T1,T3,faq_candidate},comment?}` | 202 `{split,run_id}`, **1턴**. 3라운드 초과 시 기본 분업 확정 / CANDIDATE |
+| PATCH `/sessions/{sid}/tasks/{key}` | `{base_version,status?,owner?,eta?}` | `{task}`, **1턴** / CANDIDATE |
+| PATCH `/sessions/{sid}/artifacts/{key}` | `{base_version,body}` | `{artifact,changed}`, 변경 시 **1턴** + revision / CANDIDATE |
+| GET `/sessions/{sid}/documents` · `/documents/{id}` | | PUBLIC 4개. reward-table·faq-draft는 세션 작업본(T3·T2)을 반환. 열람은 action만 기록(턴 아님) |
+| POST `/sessions/{sid}/approvals/{aid}/decision` | `{decision:'APPROVE'|'REJECT'}` | 202, **1턴**, 같은 run 재개. 같은 결정 재전송 무해, 다른 결정 409, 대기 중 산출물이 바뀌면 409 APPROVAL_STALE |
+| POST `/sessions/{sid}/submit` | `{summary?}` | 202 `{session_status:'SUBMITTED',report_id}` — 업무 종료 / CANDIDATE |
+| GET `/sessions/{sid}/debrief` · POST `/debrief/reflection` | `{text}` | 디브리핑 문구 + 소감(1회) / 종료 후 소유자 |
+| POST `/sessions/{sid}/demo/advance` | | 다음 이벤트의 트리거 턴까지 turn_count를 올리고 발생. `APP_ENV=development` 전용 / ADMIN |
+| GET `/reports/{sid}` · POST `/reports/{sid}/retry` | | 리포트(소감은 조회 시 병합) / FAILED만 재시도 / ADMIN |
+| GET `/runs/{rid}` · POST `/runs/{rid}/retry` · GET `/sessions/{sid}/events` · GET `/health` | | run 상태 / FAILED 재시도 / SSE / 점검 |
 
-직접 편집은 Agent 승인이 필요 없지만 이력·버전 검사는 동일하다. 도구 실행을 요청한 채팅의 response에는 조사 결과나 ‘위임 제안 카드’를 붙일 수 있다. 제안 구조는 `{source_message_id,title,target_section,allowed_tools,filters}`이고 사용자가 확인하기 전에는 delegation·변경이 생성되지 않는다. 어시스턴트는 TEAM과 별도 channel과 run kind이며 read-only 도구만 제공한다.
+HTTP 오류: 401 UNAUTHENTICATED, 403 FORBIDDEN·SESSION_CLOSED, 404 NOT_FOUND, 409 VERSION_CONFLICT·RUN_BUSY·ALREADY_USED·APPROVAL_STALE·SESSION_SUBMITTED, 410 INVITE_EXPIRED·APPROVAL_EXPIRED, 422 VALIDATION_ERROR.
 
-HTTP 오류: 400 INVALID_REQUEST, 401 UNAUTHENTICATED, 403 FORBIDDEN, 404 NOT_FOUND(타인 세션 포함), 409 VERSION_CONFLICT/RUN_BUSY/ALREADY_USED/APPROVAL_STALE, 410 INVITE_EXPIRED/APPROVAL_EXPIRED, 422 VALIDATION_ERROR, 429 RATE_LIMITED, 503 UPSTREAM_UNAVAILABLE. 오류 본문은 ErrorBody. validation 상세에 내부 secrets/SQL을 포함하지 않는다.
+**내부 API** (`/internal/v1`, 서비스 토큰 필수, 브라우저 쿠키 불가)
 
-위임 생성의 Idempotency-Key는 브라우저가 UUID로 만들며 action payload에 요청 hash와 응답 ID를 보관한다. DELEGATION_CREATED action의 `(session_id, payload->>'idempotency_key')`에 partial unique index를 둔다. 같은 key와 같은 요청은 기존 결과를 반환하고 다른 요청은 409다. messages의 client_message_id도 같은 방식으로 기존 message/run을 반환한다. cookie 인증/CSRF는 frontend proxy를 경유한 smoke_flow에도 적용한다.
-
-내부 API도 gateway가 계약을 검증하며 브라우저 쿠키만으로 호출할 수 없다.
-
-| Method / internal path | 입력 → 출력 |
+| path | 역할 |
 |---|---|
-| POST `/internal/v1/jobs/claim` | `{worker_id,kinds}` → `{job:null|{id,kind,session_id,run_id,input,lease_until}}`; service 인증, 단일 lease |
-| POST `/internal/v1/jobs/{jid}/complete` | `{worker_id,outcome,result?,error?}` → `{status}`; lease 소유자 확인 |
-| POST `/internal/v1/runs/{rid}/proposal` | `{interrupt_id,tool_name,args,base_versions,delegation_id}` → `{approval_id,args_hash,expires_at}`; 동일 interrupt 멱등 |
-| POST `/internal/v1/runs/{rid}/events` | `{client_event_id,type,payload}` → `{seq}`; event ID 중복 제거 |
-| POST `/internal/v1/mcp/{tool_name}` | 모델 입력 + 인증 context → 위 MCP 공통 출력; 서버 검증 후 업무 transaction |
-| POST `/internal/v1/reports/{sid}/complete` | `{run_id,source_snapshot,body}` → `{report_id,status}`; 고정 snapshot·근거 검사 |
-
-내부 event 입력의 중복 제거를 위해 stream_events에 `client_event_id text nullable` 및 `(run_id,client_event_id)` unique를 추가한다. worker의 상태/trace 보고 역시 이 경로를 사용하며 agent가 업무 테이블을 직접 수정하지 않는다. claim 응답용 MCP capability는 agent가 해당 run을 시작할 때 service 인증으로 요청하고 gateway가 DB 권한에 맞춰 발급한다(`POST /internal/v1/runs/{rid}/capability`, `{audience}` → `{token,expires_at}`).
+| POST `/jobs/claim` · `/jobs/{jid}/complete` | DB job lease |
+| POST `/runs/{rid}/capability` | scoped capability 발급 |
+| GET `/runs/{rid}/context` | Graph 입력: 활성 이벤트(정답 제외 정의), allow_pushback{E0,E2}, feedback_rules, 최근 메시지 40, 산출물·보드, 이벤트 발생 이력, 지원자 별칭 |
+| POST `/runs/{rid}/state` | run 상태. **SUCCEEDED/FAILED/CANCELLED에서 턴 엔진 tick**(메시지 턴의 이벤트는 응답이 끝난 뒤) |
+| POST `/runs/{rid}/events` | COLLEAGUE_MESSAGE·MANAGER_MESSAGE·SYSTEM_NOTICE·TOOL_START/END (client_event_id로 중복 제거) |
+| POST `/runs/{rid}/branch` | 분기 결과의 상태 효과: pushback_used, pushback_pending, e2_asked_colleague, e2b_accepted, commitment, colleague_reply_used, manager_answered, e4_stage, split{label,confirm,proposal}, end_session |
+| POST `/runs/{rid}/proposal` | 승인 생성(interrupt 전, 같은 interrupt_id 멱등). 범위: 지원자 메시지로 시작된 run, 산출물 T2·T3 |
+| POST `/mcp/{tool}` | business-mcp 도구 실행 |
+| POST `/reports/{sid}/build` · GET `/body` · POST `/summaries` · POST `/failed` | 리포트 생성·조회·(live) 근거 요약 병합·실패 표시 |
 
 ## 6. SSE 계약
 
-`id: {session_seq}` / `event: {type}` / `data: {JSON}`. data 공통 필드는 `{event_id,seq,session_id,run_id,occurred_at,payload}`. keepalive는 15초 간격 comment. Last-Event-ID 또는 after_seq 중 큰 값을 검증 후 사용. DB 보관 이벤트를 seq 순서로 재전송하고 client는 seq로 중복 제거한다. proxy 캐시 금지, `text/event-stream`, buffering 금지.
+`id: {session_seq}` / `event: {type}` / `data: {event_id,seq,session_id,run_id,occurred_at,type,payload}`. keepalive 15초. Last-Event-ID 또는 after_seq 중 큰 값 이후를 DB에서 seq 순서로 재전송하고 client는 seq로 중복 제거한다. admin에게는 admin_payload(관찰 코드 등)를, 지원자에게는 public_payload만 보낸다.
 
 | type | payload |
 |---|---|
-| RUN_STARTED | `{kind}` |
-| TOOL_START | `{tool_call_id,display_name}`; 비공개 args 제외 |
-| TOOL_END | `{tool_call_id,outcome,citations}` |
-| COLLEAGUE_MESSAGE / MANAGER_EVENT / ASSISTANT_MESSAGE | `{message_id,content,citations}` |
-| APPROVAL_REQUIRED | `{approval_id,task_id,tool_name,before,after,expires_at}` |
-| TASK_UPDATED | `{task}` |
-| ARTIFACT_UPDATED | `{version,changed_sections}` |
-| DONE / FAILED | `{status,error_code?}`; run 단위 종료 |
-| SESSION_DONE | `{report_id}` |
-| REPORT_READY / REPORT_FAILED | `{report_id}`; CANDIDATE에는 내용 없음 |
+| CANDIDATE_MESSAGE / COLLEAGUE_MESSAGE / MANAGER_MESSAGE / SYSTEM_NOTICE | `{message_id,content,citations,meta}` |
+| EVENT_FIRED / EVENT_SKIPPED | `{event_id,virtual_time,turn}` / `{event_id}` |
+| SPLIT_UPDATED / TASK_UPDATED / ARTIFACT_UPDATED | `{split}` / `{task}` / `{artifact,actor}` |
+| APPROVAL_REQUIRED / APPROVAL_DECIDED | `{approval_id,artifact_key,title,before,after,targets,expires_at}` / `{approval_id,decision,stale}` |
+| RUN_STARTED / TOOL_START / TOOL_END / DONE / FAILED | run 진행 |
+| OBSERVATION_RECORDED | 지원자 `{}` / 관리자 `{code,event_id,subject}` |
+| SESSION_DONE / REPORT_READY / REPORT_FAILED | `{report_id}` |
 
-P0는 완성 메시지만 전송하고 TOKEN 단위 전송은 P1. SSE는 권한에 따라 admin_payload를 필터링한다. 내부 관찰 해석·미발생 이벤트 조건·예산·모델 프롬프트는 지원자 스트림에 보내지 않는다.
+## 7. 턴 기반 이벤트 엔진 (`gateway/app/engine.py`)
 
-## 7. MCP 계약
+- **턴** = 팀 메시지 / 태스크 변경 / 산출물 저장(변경 시) / 분업 제안 / 승인 결정 1개. `add_turn`이 `sessions.turn_count`를 올린다. 문서 열람은 턴이 아니다.
+- **tick** = ① 무응답 처리 ② E2 리마인드 ③ 다음 이벤트 발생(최대 1개). 보드·산출물 액션은 즉시, 메시지·분업·승인은 그 run이 끝난 뒤(`/runs/{rid}/state`) 실행한다. TEAM run이 진행·승인 대기 중이면 tick을 미룬다.
+- **발생 규칙:** `events[]` 순서대로, `trigger.kind=session_start`(E0) 또는 `turn_count ≥ trigger.at`. 세션당 1회. E2B는 `e2_asked_colleague`면 skipped, E4는 `EVENT_E4_ENABLED=false`면 skipped. skipped는 발생으로 치지 않고 다음 이벤트를 같은 tick에서 계속 확인한다.
+- **발생 시:** 고정 대사를 그대로 게시(meta.kind=SCENARIO_EVENT), virtual_time 갱신, `active_event` 설정. E0은 분업 상태, E2는 T5 태스크·산출물, E3은 서윤 오프라인(답장 1회), E3B는 복귀, E4는 T4 태스크·산출물과 보고 단계.
+- **무응답(no_response_policy):** 응답을 기다리는 이벤트(E0·E1·E2B·E3B·E4)에서 지원자 메시지 없이 2턴 → SYSTEM 리마인드 1회 → 3턴 더 → 자동 진행 + RS-3(E0은 기본 분업 확정, E2B는 '다 했어요' 수용으로 처리, E4는 종료). E1은 분기 `NO_RESPONSE`(3턴, 서윤 대사 + CO-1), E2는 `NOT_REFLECTED`(3턴 뒤 지원자 담당 산출물에 2,000P가 없으면 서윤 리마인드 1회)가 대신한다.
+- **E0 분업:** 제안 1회 = 1라운드(최대 3). 부하 단위(안내문 2, 표 2, FAQ 1개당 1, 총 9)로 지원자 몫이 9면 TAKE_ALL, 3 이하면 ONE_SIDED_SPLIT, 그 외 BALANCED_SPLIT(agent negotiate 노드가 판단).
+- **종료**(`end_session`): 진행 run 취소, 대기 승인 만료 → **종료 시 일괄 판정**(`judge.py`) → reports 행 + REPORT job → SESSION_DONE. 재종료는 기존 report_id 반환.
 
-두 서버 모두 실제 MCP initialize → initialized → tools/list → tools/call을 SDK client로 수행한다. `/mcp`라는 REST 경로만 만들어 MCP라고 부르지 않는다. rag는 resources/templates/list, resources/read도 지원한다. 아래 session/actor context는 인증에서 얻고 모델 입력에는 넣지 않는다.
+**종료 시 판정 규칙(`judge.py`)**
 
-도구 출력 공통: `{ok:boolean,data:object|null,error:{code,message,retryable}|null,citations:Citation[]}`. SDK CallToolResult의 text content에 JSON 직렬화하고 지원 버전에서는 structuredContent도 같은 객체로 제공한다. 도구 실행의 업무 오류는 `isError:true`, 인자 형식/알 수 없는 도구 같은 프로토콜 오류는 MCP SDK의 JSON-RPC 오류로 전달한다. annotations는 힌트일 뿐 권한 검사의 대체물이 아니다.
+| 코드 | 규칙 |
+|---|---|
+| PL+3 (PE-1~3) | 어느 수정 이력에서든 오답 문자열이 사라졌거나, 지원자 메시지가 그 오류를 언급(`shared/scenario.py` TARGET_PATTERNS) |
+| CO·N1 | 지원자가 요청(CO+5) 없이 서윤 초안의 오답을 직접 고침 / E2 변경을 서윤 담당 산출물에 직접 반영 |
+| CO-3 | 오류를 언급했는데 요청·수정 없이 종료 / E2B '다 했어요'를 받아들인 뒤 서윤 파트 미반영 |
+| AD-1 | E2 리마인드(또는 E2B 수용) 후에도 T1·T2·T3 중 2,000P 미반영 |
+| RS+2 / RS-2 | 약속 등록 이후 지원자 산출물 저장 또는 완료 언급 → 이행 / 없고 지연 언급도 없음 → RS-2 |
+| PL+4 | E3 이후 브리프 재열람 |
+| RS-1 | 지원자 담당 미완료 태스크가 있는데 HO+1·RS+1·미완료 언급이 없음 |
 
-교안 72쪽에 따라 변경 도구는 annotations에 `readOnlyHint:false, destructiveHint:true`를 명시한다. 조회 도구는 `readOnlyHint:true, destructiveHint:false`다. MCP client adapter는 업무 오류도 같은 tool_call_id의 LangChain ToolMessage로 모델에 돌려주며, 길이 제한과 민감정보 마스킹을 거친다. 도구 설명에는 목적·인자·단위·제약·오류를 포함한다. 이 metadata만 보고 자동 승인하지 않는다.
+보드 근거 코드는 액션 시점에 기록한다: PL+1(E1 전에 내 태스크 예상 시각 기록), PL+2(E2 후 E3 전 보드 갱신).
 
-### business-mcp
+## 8. MCP 계약
 
-| 도구 | 모델 입력 JSON | data 출력 | 제약 |
-|---|---|---|---|
-| `get_session_context` | `{}` | `{public_brief,phase,tasks,artifact_version}` | actor에 맞는 공개 DTO만 |
-| `get_rejoin_metrics` | `{dimension:'overall'|'group_size',filters:{group_size?:'small'|'medium'|'large'}}` | `{rows:[{segment,label,first_time_participants,rejoined_within_30d,rejoin_rate}],unit,monthly_active_users,source_version}` | filter 값은 seed enum, 임의 SQL 금지 |
-| `get_interview_notes` | `{tags:string[],limit:int}` | `{items:[{id,group_size,tags,quote}],sampling_note}` | tags 최대 3, limit 1~8. 01:05 공개 전 NOT_FOUND. 의견 비중 일반화 금지 |
-| `update_task_status` | `{task_id,base_version,status:'IN_PROGRESS'|'REVIEW'}` | `{task}` | 동료 담당/위임 task만, 변경별 승인 |
-| `patch_artifact_section` | `{task_id,section,base_version,content,citations:Citation[]}` | `{artifact_id,version,revision_id}` | 분담 확정된 동료 담당 섹션(delegation.section_allowlist)만, 승인별 args 고정 |
+두 서버 모두 MCP SDK의 initialize → tools/list → tools/call(→ resources/read, prompts/get)을 실제로 수행한다. 도구 출력 공통: `{ok,data,error:{code,message,retryable}|null,citations}` (text + structuredContent, 업무 오류는 `isError:true`). 조회 도구 `readOnlyHint:true`, 변경 도구 `readOnlyHint:false, destructiveHint:true`, 관찰 기록은 비파괴·멱등(`destructiveHint:false, idempotentHint:true`). annotation은 힌트이며 권한은 gateway가 다시 검사한다.
 
-business-mcp는 각 도구를 gateway `/internal/v1/mcp/{tool_name}`로 전달한다. timeout 5초. 조회 실패 재시도 최대 2회. 변경은 operation_id가 있을 때만 동일 요청 재시도 가능하다. 승인된 변경 tool 호출에는 모델 입력 외에 server context `{approval_id,operation_id,args_hash,capability}`가 붙는다. gateway는 approval 상태·hash·범위·기준 버전을 다시 검사하고 receipt를 transaction에 저장한다. task_status=REVIEW가 Agent 작업 완료이며 최종 DONE 결정은 지원자 review API만 할 수 있다.
+### business-mcp (gateway `/internal/v1/mcp/{tool}` 경유, timeout 5초, 조회 재시도 2회)
 
-### rag-mcp
-
-| 제공 기능 | 입력 | 출력/규칙 |
+| 도구 | 종류 | 입력 → data |
 |---|---|---|
-| Tool `search_docs` | `{query:string,document_ids?:string[],top_k:int}` | `{matches:[{document_id,chunk_id,title,version,quote,score}],search_mode:'vector'|'keyword_fallback',embedding_model,index_version}` + citations. top_k 1~5 |
-| Resource template | `doc://{scenario_id}/{document_id}` | `{uri,mimeType:'text/markdown',text}`. 문서 버전·제목을 원문 상단에 포함 |
+| `get_session_context` | 조회 | `{}` → 턴, 가상 시각, 활성 이벤트, 서윤 상태, 보드, 산출물 목록, 이벤트 이력 |
+| `get_scenario` | 조회 | `{}` → 시나리오 정의(**planted_errors·commitment_tracking·actual_state·end_check 제외**) |
+| `get_next_event` | 조회 | `{}` → `{turn_count,active_event,awaiting,next{id,type,trigger,virtual_time,turns_until,optional}}` |
+| `get_planted_error` | 조회(기밀) | `{error_ids?}` → `{confidential:true,items:[{id,doc,where,wrong,correct,fix[]}]}`. Agent 판정·수정 전용. 모델에 바인딩하지 않고 서윤 발화에 쓰지 않음 |
+| `record_observation` | 기록(승인 불필요) | `{code,evidence_ref{kind:message|revision|action,id},event_id?,subject?,note?}` → `{recorded,code,competency}`. 코드북 밖 코드 INVALID_ARGUMENT, 다른 세션 근거 NOT_FOUND |
+| `update_task_status` | 변경(승인) | `{task_key,base_version,status:IN_PROGRESS|DONE}` — 서윤 담당 태스크만 |
+| `patch_artifact_section` | 변경(승인, destructive) | `{artifact_key:T2|T3,base_version,content,targets[]}` → `{artifact_key,version,revision_id}` |
 
-P0 검색은 query를 색인과 같은 model/revision으로 임베딩하고 `1 - cosine_distance`를 score로 반환한다. scenario_id·document_ids·index_version 권한 필터를 적용한 뒤 similarity 내림차순, 동점은 document_id/ordinal로 정렬한다. 색인 없음/모델 불일치는 INDEX_NOT_READY/MODEL_MISMATCH로 실패한다. 원문은 checksum으로 버전을 고정한다. 평가 기준 검색 도구나 비공개 정책 Resource는 공개 Agent에 제공하지 않는다.
+### rag-mcp (읽기 전용 role)
 
-개발용 명시적 RAG_MODE=keyword_fallback일 때만 기존 토큰/keyword 일치 검색을 사용한다. search_mode와 health/UI에 fallback을 표시하고 AT-16은 미통과로 남긴다. 무조건 top-k 반환으로 관련 없는 청크를 근거 삼지 않도록 과제 평가셋에서 score 임계값을 고정한다. 문서 없음/필터 결과 0건은 matches=[]로 반환한다. Resource는 모델이 직접 고르는 tool이 아니므로 Host가 source panel 열람 또는 제한된 read_resource adapter로 읽어 context에 주입하고 호출 이력을 남긴다.
+| 기능 | 계약 |
+|---|---|
+| Tool `search_docs` | PUBLIC 문서 4개 벡터 검색. `{query 1~200자,document_ids?,top_k 1~5}` → matches(quote = 원문 청크의 연속 부분 문자열, score = 1 − cosine, 임계값 0.25) |
+| Tool `search_criteria` | INTERNAL 코드북 검색(표 1행 = 청크 1개). Agent 판정 전용 |
+| Resource `doc://{scenario_id}/{document_id}` | `sc-a`·`fitmoa-invite-v1` 둘 다 허용. PUBLIC 원문(seed 기준) + 제목·버전·checksum. 코드북은 Resource로 읽을 수 없음 |
+| Prompt `colleague_persona` | `prompts/colleague-seoyoon-v1.md`에 `event_directive`, `allow_pushback` 주입 |
+| Prompt `manager_persona` | `prompts/manager-junho-v1.md`에 `event_directive` 주입 |
 
-MCP 오류 코드: NOT_FOUND, FORBIDDEN, INVALID_ARGUMENT, OUT_OF_SCOPE, APPROVAL_REQUIRED, APPROVAL_EXPIRED, VERSION_CONFLICT, INDEX_NOT_READY, MODEL_MISMATCH, TIMEOUT, RATE_LIMITED, INTERNAL_ERROR. 실패 기록에 run_id/tool_call_id를 연결한다. query 인젝션 또는 문서의 “정책 무시” 지시는 데이터로만 취급하고 허용 도구 목록을 바꾸지 않는다.
+오류 코드: NOT_FOUND, FORBIDDEN, INVALID_ARGUMENT, OUT_OF_SCOPE, APPROVAL_REQUIRED, APPROVAL_EXPIRED, VERSION_CONFLICT, INDEX_NOT_READY, MODEL_MISMATCH, TIMEOUT(retryable), INTERNAL_ERROR.
 
-## 8. Agent State와 Graph
+## 9. Agent Graph (`agent/app/graph.py`)
 
-```python
-class WorkState(TypedDict):
-    session_id: str
-    run_id: str
-    task_id: str | None
-    kind: str
-    phase: str
-    source_message_id: str | None
-    message_ids: list[str]
-    context_summary: dict | None  # text, source_ids, prompt_version
-    facts: dict
-    tool_results: list[dict]
-    citations: list[dict]
-    proposed_action: dict | None
-    approval_id: str | None
-    delegation_id: str | None
-    help_id: str
-    policy_version: str
-    step_count: int
-    tool_counts: dict[str, int]
-    active_execution_ms: int
-    output_rewrite_count: int
-    retries: int
-    error_code: str | None
-```
+설계서 8장의 세션 흐름(load_scenario → standup·negotiate → work ⇄ inject_event → briefing → END → 리포트 job)은 다음처럼 나눠 구현했다. **이벤트 주입(inject_event)과 순서는 gateway 턴 엔진**이, **지원자 행동 하나에 대한 서윤·팀장 반응은 아래 run Graph**가 맡는다. 지원자 행동마다 run 1개, `thread_id = session_id:run_id`.
 
 ```text
-(구현: services/agent/app/graph.py build())
-START → load_context → classify_request → select_help → reason
-reason ─┬─ 도구 필요(plan 있음) → call_mcp ─┬─ (live) reason  … 단계 8 / 도구 5 / 같은 도구 3 / 120초 한도 내 반복
-        │                                   ├─ 일반 응답 → validate_output → respond → END
-        │                                   └─ 위임 작업 → draft_delegation
-        ├─ 일반 응답 → validate_output → respond → END
-        └─ 위임 작업(DELEGATED) → draft_delegation → persist_proposal → await_approval(interrupt)
-                 await_approval ─┬─ APPROVE → execute_write(MCP patch_artifact_section) → respond → END
-                                 └─ REJECT / REVISE → record_rejection → respond → END
+START → load_scenario (internal context + MCP get_scenario·get_next_event)
+  → route_phase ─┬─ negotiate  : 분업 제안(run.type=split) — 부하 단위 분류, 반문 1회(allow_pushback.E0), 확정/CO+1/CO-2
+                 ├─ briefing   : E4에서 팀장에게 보낸 보고 — 보드·2,000P·오류 상태와 대조(HO+1/HO-1, HO+2) → 후속 질문 1회
+                 │                → 답(HO+3/HO-2) → end_session
+                 └─ work → classify (닫힌 분류: 활성 이벤트 branches + feedback_rules + 반문 뒤 라벨, 없으면 NONE) → decide
+  → record_observations (MCP record_observation) → apply_effects (/runs/{rid}/branch)
+  ─┬─ 분기 대사 있음/없음 → respond (고정 대사, meta.kind=SCENARIO_BRANCH)
+   └─ NONE → reason ⇄ call_mcp (live: Prompt colleague_persona/manager_persona + search_docs·get_session_context; fixture: 고정 대사)
+             → validate_output (정답 누설·근거 없는 숫자·판정 표현 차단 → 서윤 고정 대사로 대체) → respond
+  respond ─ 정정 수용(targets) → propose_fix (MCP get_planted_error의 수정 규칙, 요청 대상만)
+          → persist_proposal → await_approval (interrupt) ─┬─ APPROVE → execute_write (MCP patch_artifact_section)
+                                                            └─ REJECT → record_rejection
+          → next_fix (수정안이 여러 산출물이면 반복) → report_fix ('고쳤어요' / '넵 알겠어요!') → END
 ```
 
-classify_request 의도(코드 규칙, 허용 범위는 코드가 판단): `delegated`(분담·수정 작업 run) · `policy_recheck`(01:30 오류 지적 → 운영 정책 원문 재확인 후 정정) · `revise_request`(채팅 수정·초안 요청 → 실제 재작성 run 생성) · `feedback`(작성 섹션 피드백) · `answer_request`(정답 요구 → 자료 범위 질문) · `investigate`(MCP 조사) · `conversation`.
-draft_delegation은 섹션 본문 전용 작성 단계(section-writer 프롬프트)로, 수정 요청이면 섹션 전체 재작성, 지원자 채팅 제안은 필수 반영 검사 후 누락 시 재작성·보정한다.
-시나리오 이벤트(00:10 분담 ~ 02:00 자동 제출)는 Graph 노드가 아니라 gateway 시험 시계(`gateway/app/timeline.py`, agent ticker가 2초마다 tick)가 서버에서 발생시킨다(v1.2의 evaluate_conditions/조건부 개입은 폐기).
+- **decide 규칙:** E2 변경 대상 정정을 E2/E2B에서 처음 요청하면 반문 1회(CO+5, E2에서면 e2_asked_colleague) → 반문 뒤 이유를 들어 재요청하면 수용(CO+6)·수정안, 요청을 거두면 CO·N1. 그 외 구체적 정정(SPECIFIC_CORRECTION 등)은 즉시 인정 + CO+5 + 수정안. 모호하면 "앗 어떤 부분이요?". 서윤 오프라인이면 남은 답장 1회만, 이후 SYSTEM 상태 알림. 팀장은 E2 분기 라벨 또는 브리프 범위 1회 답, 이후 '회의 중'. 약속 문장은 commitment로 등록.
+- **interrupt:** `persist_proposal`이 승인을 멱등 생성한 뒤 `await_approval`은 `interrupt()`만 한다. 재개는 같은 thread_id에 `Command(resume=decision)`. 승인 대기 중 산출물이 바뀌면 APPROVAL_STALE. mutation_receipt로 중복 적용을 막는다. 재시작 후에도 같은 checkpoint에서 재개한다.
 
-각 사용자 명령은 별도 run, `thread_id = session_id + ':' + run_id`. session 전체 진행도는 sessions/actions가 소유하고 해당 run의 interrupt는 같은 thread_id와 checkpoint로 재개한다. 같은 채널(팀 채팅/어시스턴트)에 진행 중인 응답 run이 있을 때만 RUN_BUSY를 반환한다. 동료의 백그라운드 섹션 작업이 승인 대기 중이어도 채팅은 계속 가능하다. 지원자 직접 문서 편집과 승인/거절/위임 취소/제출은 계속 가능하며 base_version을 갱신한다.
+## 10. Harness 8요소 (`agent/app/harness.py`, `evals/harness-v1.json`)
 
-`classify_request`는 LLM 구조화 출력으로 조사/위임 제안/질문을 선택할 수 있지만 허용 scope·도움 조건·이벤트 발생은 코드가 판단한다. 실패 시 명시적 ‘자료 조사’ 버튼/위임 카드로 동일 기능을 수행한다. 계획 자체를 지원자 대신 완성하는 action은 schema에 존재하지 않는다.
-
-interrupt 전 `persist_proposal` 노드에서 approval을 idempotent하게 생성한다. 다음 노드는 `interrupt({approval_id,...})`만 수행하며 전후에 비멱등 쓰기를 섞지 않는다. 재개는 `Command(resume=decision)`와 같은 thread_id를 사용한다. 승인 대상 args는 사용자가 수정할 수 없고 바뀌면 새 제안·새 승인이 필요하다. interrupt 대기 시간은 120초 run 실행 예산에서 제외하되 approval은 생성 후 10분 만료한다.
-
-승인 결정은 PENDING만 CAS 변경 가능. 재개 시 현재 소유권·delegation·session ACTIVE·base_version·args_hash·만료를 재검사한다. 승인 중 문서 수정은 APPROVAL_STALE로 종료하고 재조사 제안을 돌려준다. 승인 응답 재전송은 같은 결정이면 현재 run 상태를 반환하고 다른 결정이면 409. mutation receipt가 있으면 중복 적용하지 않는다.
-
-task 상태: TODO → IN_PROGRESS → REVIEW → DONE. REVIEW에서 REVISE는 IN_PROGRESS로 되돌리고 새 run, REJECT는 CANCELLED. Agent는 DONE/자기 권한 확대를 할 수 없다. 지원자 task는 TODO→IN_PROGRESS→DONE 직접 변경 가능. 이외 전이는 409. phase REVIEW는 지원자가 검토/제출 준비를 선택한 표시이며 조건부 이벤트를 모두 소모해야 넘어가는 관문이 아니다.
-
-## 9. Harness 8요소
-
-| 요소 | P0 구현 규칙 |
+| 요소 | 구현 |
 |---|---|
-| Instructions | `prompts/colleague-v1.md`, `assistant-v1.md`, `report-v1.md`, `summary-v1.md`로 역할·금지·도구 규칙·출력 형식을 버전 관리. Python 코드에 장문 system prompt 직접 삽입 금지 |
-| Tools | run 종류별 allowlist, read/write 분리, session/위임 범위 서버 검증. 도구 결과 1500 tokens 제한·오류 ToolMessage·개인정보 마스킹. 승인 없이 실제 write 금지 |
-| Context | 입력 총 6000 tokens, 출력 1200 tokens. 최근 메시지 최대 12개 + public brief + 청크 최대 5개 + 해당 위임. 초과하면 오래된 대화를 출처 ID 포함 800 tokens 이하로 요약하고 재측정, 그래도 초과하면 오래된 검색 청크부터 제외. 비공개 평가 해석·타 세션 내용 제외 |
-| State/Memory | PostgreSQL checkpoint, immutable 업무 원문, source refs. 프로세스 재시작 후 승인 대기 run 조회 |
-| Agent Loop | 활성 실행 120초, reasoning/tool cycle 최대 8회, 도구 호출 총 5회·같은 도구 최대 3회, 응답 출력 최대 1200 tokens. 한도 초과는 LIMITED 응답과 저장 |
-| Guardrails | scope+도움 잠금+approval+버전 검사, 출력 schema와 인용 검증, 판정/정답 생성 차단. 이메일/전화는 trace·외부 prompt 직전 마스킹 |
-| Recovery | 429/503/timeout 최초+2회 재시도, 1s/2s jitter·120초 잔여 예산. 다른 모델 전환 없음. 실패 시 명확한 FAILED와 재시도 |
-| Observability | P0 LangSmith 연동, 메시지·로그·trace에 같은 trace_id. node/tool/approval/policy/latency/token usage/실패와 trace URL 저장. 비용은 모델 usage×버전 관리 단가로 계산 가능한 때만 추정 표시, 단가 없으면 null. 키 없으면 로컬 로그로 개발 지속하되 AT-17 LangSmith 증빙 미완료. 원문 프롬프트·비밀값은 공개 SSE 제외 |
+| Instructions | `prompts/colleague-seoyoon-v1.md`(설계서 7장 초안 + 운영 규칙), `manager-junho-v1.md`, `classify-branch-v1.md`, `summary-v1.md`, `report-summary-v1.md`. 버전 해시 기록, 코드에 장문 프롬프트 없음 |
+| Tools | 대화 모델에는 `search_docs`·`get_session_context`만 바인딩. 판정 도구(`get_planted_error`, `search_criteria`)는 Graph 코드만 호출. 결과 1500 tokens 제한, 업무 오류는 ToolMessage, PII 마스킹 |
+| Context | 입력 6000 / 출력 1200 tokens, 최근 메시지 12개, 초과 시 출처 ID 포함 800 tokens 요약 |
+| State/Memory | PostgreSQL checkpoint, 승인 대기 run을 같은 thread로 재개 |
+| Agent Loop | 단계 8, 도구 총 5·같은 도구 3, 활성 120초 |
+| Guardrails | 닫힌 분기 분류(NONE), 반문 플래그는 gateway 계산, 정답 누설 가드(get_planted_error 정답 값 — 지원자가 먼저 말한 값은 허용), 근거 없는 숫자·판정 표현 차단, 채팅 마크다운 제거, 승인 없는 변경 거절 |
+| Recovery | 429/503/timeout 최초 + 2회 재시도(1s/2s jitter), 모델 전환 없음, run FAILED → 재시도 버튼. live 분류 실패 시 규칙 분류 |
+| Observability | run별 trace_id·token_usage, LangSmith trace(run_id metadata), tool_calls 로그 |
 
-무한 자동 교정은 금지한다. 출력 검증 실패 시 1회 재작성, 또 실패하면 정적 안전 응답(“확인할 자료 범위를 선택해 주세요”)과 오류 기록. 비즈니스 숫자는 tool 결과 또는 문서 인용에 없는 경우 생성 금지. 같은 검색 키로 세 번 실패하면 다른 수치로 추정하지 않는다. 도움 목록과 정책을 프롬프트로만 통제하지 않는다.
+## 11. 리포트 (`gateway/app/report.py`, REPORT job)
 
-Evaluation은 관측과 별개로 구현한다(교안 69·72쪽). 고정 평가셋에 8요소 각각의 테스트를 연결하고 정책/프롬프트/한도 변경 전후 결과를 JSON으로 저장한다. 같은 오류 주입 스크립트로 반복 가능해야 한다. Context 요약은 사실·원문 ID만 보존하며 지원자의 의도/성격을 추가 추론하지 않는다. 요약 호출도 활성 시간/토큰/비용에 합산한다. 위 6000/1200/1500/800 token 값과 도구 총 5회 상한은 자체 선택이며 교안의 고정 수치라고 주장하지 않는다.
+REPORT job → `/reports/{sid}/build`(규칙) → READY. live 모드에서만 관찰된 역량에 'AI 요약(근거 원문 확인 필요)' 1문장을 병합한다(판정어 포함 시 폐기). 실패하면 worker가 `/failed`로 FAILED 표시 → 관리자 '다시 생성'.
 
-## 10. 제출·리포트·복구
+본문(`schema_version 3.0`): `timeline`(발생·건너뜀), `competencies[5]{key,label,status:OBSERVED|INSUFFICIENT|NO_OPPORTUNITY,status_label,related_events,observations[{code,definition,polarity,event_id,subject,note,source,evidence}],notes}`, `planted_errors`(최종 상태·수정한 사람·관련 코드), `e2_change`, `commitments`, `final_board`, `raw{messages,revisions(diff),approvals}`, `reflection`, `limitations`. 역량-이벤트 대응은 설계서 2장 매트릭스(`shared/scenario.py` COMPETENCY_EVENTS). 점수·등급·순위·합불 필드는 없다.
 
-submit은 session row lock → base_version 검사 → SUBMITTED/최종 artifact revision 고정 → 진행 run CANCELLED·승인 EXPIRED·delegation revoked → report row와 REPORT job → SESSION_DONE을 한 transaction에 저장한다. 직전 변경 도구와 경합하면 먼저 lock을 얻은 transaction만 유효 상태에서 실행한다. 재제출은 기존 report_id를 반환하며 새 작업을 만들지 않는다.
+## 12. 품질 속성과 검증 연결
 
-report job은 source_snapshot에 message/revision/action/tool/event ID를 고정한다. 사실 지표·발생 기회는 코드로 구성하고 LLM은 설명·가설만 생성한다. 모든 quote는 원문에서 검증하고 맞지 않는 evidence는 제거한다. 항목별 근거가 없으면 상태를 표시한다. LLM 실패 시 규칙 기반 사실 리포트를 만들고 `generation_mode:'RULES_FALLBACK'`를 표시한다. 사실 리포트도 실패하면 FAILED. 생성 시도 총 3회, report_id가 멱등키다.
-
-```json
-{
-  "schema_version":"2.0","generation_mode":"LLM_WITH_RULES",
-  "policy_version":"exam-v1","scenario_id":"moarun-rejoin-v1","submitted_by":"CANDIDATE",
-  "timeline":[{"event_id":"T-ERROR","at":"01:30","situation":"동료가 운영 정책과 충돌하는 유료 멤버십 기능을 제안함"}],
-  "areas":[{"dimension":"RESPECT_COMMUNICATION","label":"존중·소통","status":"OBSERVED",
-            "situations":[{"event_id":"T-ERROR","situation":"…","status":"OBSERVED","at":"01:30"}],
-            "facts":[{"text":"팀 채팅에 메시지: “운영 정책에 올해 유료 기능은…”","at":"01:31","refs":[{"kind":"message","id":"…","field":"content","start":0,"end":40,"quote":"…"}]}],
-            "interpretation":{"text":"정책 근거를 들어 오류를 전달했을 가능성","label":"INFERENCE"},"limits":"…"}],
-  "split_history":[{"kind":"SPLIT_CONFIRMED","assignments":{},"at":"00:12"}],
-  "limitations":["단일 가상 과제에서 관찰한 행동이며 성격·채용 성과를 단정하지 않음"]
-}
-```
-
-위 JSON은 필드 형식 예시다. 실제 OBSERVED 항목 facts는 유효 EvidenceRef 1개 이상이어야 한다. status는 OBSERVED/NO_OPPORTUNITY/INSUFFICIENT_EVIDENCE/NOT_USED. areas는 책임감·존중소통·협력·유연성·AI 활용 5개이며 각 facts에는 이벤트 이후 다음 이벤트 전까지의 실제 지원자 행동과 시각을 담는다. 점수·등급·순위·합불 필드는 없다.
-
-jobs claim은 `FOR UPDATE SKIP LOCKED`로 단일 lease(150초)를 부여한다. 만료 job은 worker가 checkpoint/receipt를 조회하고 재개한다. WAITING_APPROVAL는 job을 DONE으로 바꾸며 승인 API가 같은 run의 job을 QUEUED로 갱신하고 resume 입력을 저장한다. run_id unique job은 새 row를 중복 생성하지 않는다. 시나리오 이벤트는 job이 아니라 agent ticker가 2초마다 호출하는 내부 `POST /internal/v1/timeline/tick`에서 세션 row lock 아래 발생시킨다(세션당 이벤트 1회, 02:00 자동 제출 포함). REPORT job도 전용 REPORT run을 만든다. 각 node의 활성 실행 시간을 checkpoint에 누적하고 승인 대기 시간을 빼서 총 120초 예산을 재개 후에도 유지한다. 프로세스 재시작 시 PENDING 승인은 만료 검사 후 UI에 복원하며 자동 승인하지 않는다. SSE 이벤트도 DB에서 복원한다.
-
-## 11. 품질 속성과 검증 연결 (ISO/IEC 25010 8특성)
-
-| 품질 특성 | 설계 선택 | 검증(evidence/verification.md) |
+| 품질 특성 | 설계 선택 | 검증([evidence/verification.md](../evidence/verification.md)) |
 |---|---|---|
-| 기능 적합성 | 입장→분담→조사→섹션 초안·승인→제출→근거 리포트, 시험 시계 이벤트 9개 | AT-01~07, AT-13 · smoke_flow live 44/44 |
-| 성능 효율성 | 작은 context(입력 6000/출력 1200 tokens), 조회 상한(top-k 5, 결과 1500 tokens), exact 벡터 검색, 단일 worker | 로컬 seed 기준 일반 저장 응답 1초 이내 목표(LLM 지연 제외) |
-| 호환성 | 서비스 간 표준 계약(MCP Streamable HTTP, REST, SSE), 공통 도구 출력 `{ok,data,error,citations}` | smoke_mcp 22/22(SDK initialize/list/call/read) |
-| 사용성 | 저장 상태·승인 전후 비교·출처 원문 이동·오류 재시도, DESIGN_GUIDE 토큰·접근성 | AT-15(부분), 화면 캡처 evidence/screens |
-| 신뢰성 | PostgreSQL checkpoint, job lease, 멱등 receipt, SSE replay, 섹션 단위 stale 판정 | AT-08(재시작 재개 PASS), AT-09, AT-10(부분) |
-| 보안성 | role/session scope, 초대 토큰 hash, CSRF·Origin, 120초 scoped capability, 최소 권한 DB role, 제출 후 재열람 차단 | AT-11, AT-12 |
-| 유지보수성 | typed 계약, 시나리오 데이터·정책 분리, 버전 관리 프롬프트, Harness 평가셋 | eval_harness 8/8, 단위·통합 테스트 |
-| 이식성 | 서비스별 Dockerfile·Compose, 환경변수 설정, 로컬 임베딩 모델 | Compose 문법 검증(빌드·기동은 NOT_RUN) |
+| 기능 적합성 | E0~E4 턴 엔진, 분기·승인·관찰·리포트 | smoke_flow (fixture) |
+| 신뢰성 | checkpoint 재개, job lease, 멱등 승인·receipt, SSE 재생 | restart_resume, smoke_flow SSE 재생 |
+| 보안성 | 소유권 404, CSRF·Origin, scoped capability, 최소 권한 role, 종료 후 재열람 차단, 정답 비공개 | pytest, smoke_mcp |
+| 호환성 | MCP Streamable HTTP, REST, SSE, 공통 도구 출력 | smoke_mcp |
+| 유지보수성 | 시나리오 JSON만 바꾸면 이벤트·분기·대사 교체, 코드북 단일 원본(criteria.md) | eval_harness |
+| 사용성 | 3단 작업 공간, 저장 상태, 승인 diff, 가상 시각 | 브라우저 UI 확인(evidence/ui_check.py) |
 
-## 12. 참고한 기술 원문
+## 13. 참고한 기술 원문
 
-MCP 서버/도구/Resource는 [공식 MCP 서버 문서](https://modelcontextprotocol.io/docs/develop/build-server)를 확인했다. interrupt와 같은 thread 재개·체크포인트·재실행 시 부작용 주의는 [LangGraph interrupt 문서](https://docs.langchain.com/oss/python/langgraph/interrupts)를 확인했다. 이 문서의 업무 API·권한·정책은 Day Zero 구현을 위한 자체 계약이며 라이브러리 기본 동작으로 간주하지 않는다.
-
-과제 기준은 사용자 제공 `AI-Agent Capstone(+MCP).pdf`의 29·33·47~66·69~73쪽이다. 임베딩 모델의 384차원 및 사용 방식은 [모델 배포자 카드](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2)에서 확인했다. 이 모델 선택은 교안 요구가 아닌 마감용 구현 결정이다.
+MCP 서버/도구/Resource는 [공식 MCP 서버 문서](https://modelcontextprotocol.io/docs/develop/build-server)를 확인했다. interrupt와 같은 thread 재개·체크포인트·재실행 시 부작용 주의는 [LangGraph interrupt 문서](https://docs.langchain.com/oss/python/langgraph/interrupts)를 확인했다. 이 문서의 업무 API·권한·정책은 Day Zero 구현을 위한 자체 계약이며 라이브러리 기본 동작으로 간주하지 않는다. 임베딩 모델의 384차원 및 사용 방식은 [모델 배포자 카드](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2)에서 확인했다.
