@@ -1,0 +1,13 @@
+{
+  "version":"help-v1",
+  "max_auto_interventions":3,
+  "min_candidate_actions_between_interventions":2,
+  "levels":{
+    "H0":{"level":0,"allowed":["public_brief","ui_help"]},
+    "H1":{"level":1,"allowed":["clarify_question","suggest_investigation_scope"]},
+    "H2":{"level":2,"requires":"explicit_read_request","allowed":["get_funnel_metrics","get_support_cases","search_docs","read_resource"]},
+    "H3":{"level":3,"requires":"active_delegation_and_per_mutation_approval","allowed":["update_task_status","patch_artifact_section"],"sections":["evidence"]}
+  },
+  "assistant":{"max_level":2,"write_tools":[]},
+  "forbidden_actions":["choose_final_priority","write_final_solution","score_candidate","reveal_hidden_policy"]
+}

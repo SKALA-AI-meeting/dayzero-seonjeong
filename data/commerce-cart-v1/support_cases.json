@@ -1,0 +1,8 @@
+[
+ {"id":"VOC-01","device":"mobile","visitor":"new","tags":["shipping","transparency"],"quote":"결제 단계에 가서 배송비가 붙는 걸 알았어요."},
+ {"id":"VOC-02","device":"mobile","visitor":"new","tags":["signup","friction"],"quote":"주문하려는데 가입부터 해야 해서 나중에 하기로 했어요."},
+ {"id":"VOC-03","device":"mobile","visitor":"returning","tags":["performance","checkout"],"quote":"주소 입력 화면이 늦게 떠서 다시 눌렀어요."},
+ {"id":"VOC-04","device":"desktop","visitor":"new","tags":["coupon","transparency"],"quote":"쿠폰이 되는 상품인지 결제 화면에서야 알았어요."},
+ {"id":"VOC-05","device":"desktop","visitor":"returning","tags":["comparison","deferred"],"quote":"회사에서 장바구니에 담고 집에서 비교해 보려고 했어요."},
+ {"id":"VOC-06","device":"mobile","visitor":"new","tags":["shipping","transparency"],"quote":"무료배송 기준까지 얼마가 남았는지 알기 어려웠어요."}
+]

@@ -1,0 +1,33 @@
+[project]
+name = "dayzero-services"
+version = "0.1.0"
+description = "Day Zero MVP — gateway, agent, business-mcp, rag-mcp"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.8",
+  "sqlalchemy>=2.0",
+  "psycopg[binary,pool]>=3.2",
+  "alembic>=1.13",
+  "argon2-cffi>=23.1",
+  "pyjwt>=2.9",
+  "httpx>=0.27",
+  "mcp>=1.9",
+  "langgraph>=0.6",
+  "langgraph-checkpoint-postgres>=2.0",
+  "langchain-core>=0.3",
+  "langchain-openai>=0.3",
+  "langsmith>=0.3",
+  "tiktoken>=0.7",
+  "pgvector>=0.3",
+  "sentence-transformers>=3.0",
+  "pytest>=8.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
