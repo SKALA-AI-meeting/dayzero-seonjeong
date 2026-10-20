@@ -244,6 +244,18 @@ def main() -> int:
     check("E2B 건너뜀(조건 불충족) → 다음 이벤트 E3", "E2B" not in s["events"] and "E3" in s["events"], str(s["events"]))
     check("세션 B 반문도 정확히 1회", sum(PUSHBACK in m["content"] for m in s["messages"]) == 1)
 
+    # SSE 재연결: Last-Event-ID 이후 이벤트만 순서대로 다시 받는다
+    last = y.snap()["session"]["last_stream_seq"]
+    mid = max(1, last - 3)
+    seqs: list[int] = []
+    with y.c.stream("GET", f"/sessions/{y.sid}/events", headers={"Last-Event-ID": str(mid)}, timeout=10) as st:
+        for line in st.iter_lines():
+            if line.startswith("id: "):
+                seqs.append(int(line[4:]))
+            if len(seqs) >= last - mid:
+                break
+    check("SSE 재연결(Last-Event-ID) → 이후 이벤트만 순서대로 재생", seqs == list(range(mid + 1, last + 1)), f"{mid}→{seqs}")
+
     failed = [n for n, ok, _ in res if not ok]
     print(f"\n결과: {len(res) - len(failed)}/{len(res)} PASS (session A {x.sid}, B {y.sid})")
     return 1 if failed else 0

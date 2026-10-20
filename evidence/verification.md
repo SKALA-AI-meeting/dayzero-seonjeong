@@ -1,64 +1,38 @@
-# 수용 테스트 검증 기록 (AT-01 ~ AT-17)
+# 검증 기록 — 핏모아 sc-a 최소 MVP
 
-- 기준: AGENT_GUIDE.md v1.3 §6, 시나리오 `DAYZERO_EXAM_SCENARIO.md`(루프랩 모아런, `moarun-rejoin-v1`)
-- 환경: 로컬 macOS, Python 3.11.9 · Node 26.7 · PostgreSQL 17 + pgvector(Docker, 호스트 5434), web `http://localhost:3100`
-- 모델: `gpt-4o-mini`(live) / fixture. LangSmith 프로젝트 `dayzero-seonjeong-mvp` 연동
-- 판정 원칙: 실제로 실행해 확인한 것만 PASS. 일부만 확인했으면 PARTIAL, 실행하지 않았으면 NOT_RUN
-- 기록 시각: 2026-10-20 15:0x KST
+실행: 2026-10-20 · 브랜치 `refactor/fitmoa-sc-a` · fixture 모드(`LLM_MODE=fixture`) · `./infra/dev-reset-db.sh`로 DB를 새로 만든 뒤 `./infra/dev-up.sh`(**DB 컨테이너 하나만** 기동) · 원문 출력은 [smoke_results.md](smoke_results.md).
 
-## 요약
+판정 규칙: 실제로 실행해 통과한 것만 PASS. 실행하지 않았거나 조건이 안 된 것은 미검증으로 둔다. 이전 시나리오(모아런) 기준 검증 기록과 화면 캡처는 모두 지웠다(git 기록에만 남음).
 
-| 판정 | 개수 | 항목 |
-|---|---:|---|
-| PASS | 13 | AT-01 02 03 04 05 07 08 09 11 12 13 16 17 |
-| PARTIAL | 4 | AT-06 10 14 15 |
-| FAIL / NOT_RUN | 0 | — |
+## 수용 테스트 (docs/AGENT_GUIDE.md 3장)
 
-## 상세
-
-| ID | 판정 | 실행·근거 | 메모 / 남은 확인 |
+| ID | 항목 | 결과 | 근거 |
 |---|---|---|---|
-| AT-01 | PASS | `services/tests/test_m0_auth.py` 6/6, `smoke_flow` 킥오프 검사 | 로그인→초대→동의→start 2회, 초대 1회 사용, 킥오프(팀장+동료) 1회, 동의 전 업무 API 403 |
-| AT-02 | PASS | `evidence/smoke_mcp.md` 22/22 | 전체 4,000/880 = 0.22, 규모별 0.31/0.24/0.155, group_size 필터, 잘못된 enum 오류 |
-| AT-03 | PASS | `evidence/smoke_flow_live.md`, `smoke_flow_fixture.md` | 202 → RUN_STARTED → TOOL_START/END → 근거 응답(출처 chip) → DONE, 실제 business/rag MCP 호출 |
-| AT-04 | PASS | `smoke_flow` 분담 조정 1회·확정 | 조정 최대 3회, 확정 담당 태스크 반영, 동료 담당 섹션별 delegation/run 생성 |
-| AT-05 | PASS | `smoke_flow`, `scripts/smoke_card_revise.py` 7/7 | 승인 전 무변경, 거절 무변경, 승인 후 revision 1개, 중복 승인 무해, 다른 결정 409, 재수정 요청 시 미반영 + 새 카드 |
-| AT-06 | PARTIAL | 섹션 단위 stale 판정 코드·smoke 경로 | 확인 대기 중 대상 섹션 변경 시 APPROVAL_STALE 구현. **자동 테스트로 직접 재현은 안 함.** 사용자 결정으로 지원자 담당 섹션도 채팅으로 명시 요청하면 동료가 수정안을 낼 수 있음(승인 필수) — 기존 OUT_OF_SCOPE 기대와 다름 |
-| AT-07 | PASS | `smoke_flow` 제출·02:00 자동 제출 | snapshot 고정, 리포트 5영역 OBSERVED·근거 메시지와 시각, 분담 이력, score/grade/rank/pass/fail 없음. 제출 후 지원자에게는 종료 안내만 제공하고 세션·자료·원문·SSE 재열람 403(보안). live에서 LLM_WITH_RULES(관찰 영역에만 'AI 추정' 해석·후속 확인점, 판정 표현 차단) |
-| AT-08 | PASS | `evidence/at08_restart_resume.md` | agent 프로세스 종료·재기동 후 승인 대기 복원, 같은 thread_id로 재개, revision 1개·receipt 1개, 승인 2회 전송에도 중복 없음 |
-| AT-09 | PASS | M1 검증(프록시 경유 curl), 브라우저 실사용 | Last-Event-ID 재접속 시 이후 seq만 재전송, 타 세션 404. 15시 이후 SYSTEM_NOTICE/DOCUMENTS_UPDATED 구독 누락 수정 |
-| AT-10 | PARTIAL | `evals/results/harness-v1-baseline.json` H-REC | 재시도 로직(429 두 번 후 성공 3회, 503 지속 3회 후 실패, 비재시도 1회) 검증. 리포트 해석 실패 시 규칙 기반(RULES_FALLBACK) 유지 경로 구현. **실제 LLM에 429/503 주입, 리포트 LLM 실패 주입은 NOT_RUN** |
-| AT-11 | PASS | `test_m0_auth.py`, `smoke_flow` | 타 세션 404, 지원자 관리자 API·리포트 403, 내부 API 쿠키 호출 차단, extra 필드 422 |
-| AT-12 | PASS | `test_m0_auth.py`, `smoke_flow`, `smoke_mcp` | 초대 재사용 409·만료 410, 제출 후 쓰기 409, 승인 없는 변경 도구 거절, 초대 토큰 URL에서 즉시 제거·해시 저장 |
-| AT-13 | PASS | `smoke_flow`(시연 시간 이동) | 9개 이벤트 정시·1회, 인터뷰 01:05 전 열람·검색·도구 차단, 01:10 변경 반영, 01:30 오류는 지적 시에만 정정(ERROR_CORRECTED), 시연 기능은 관리자 화면에만 |
-| AT-14 | PARTIAL | 인용 원문 검증 코드, `smoke_mcp` | quote가 원문 부분 문자열이 아니면 citation 제거, 문서 내 지시문은 데이터 취급(프롬프트). **조작 citation·조작 tool args 주입 테스트는 NOT_RUN** |
-| AT-15 | PARTIAL | `evidence/screens/*.png`(Chrome headless 실조작) | 1440/1280/1024/1920 가로 overflow 없음·페이지 스크롤 없음, PRD 팔레트·코랄 버튼 #111827, 그라데이션 없음, 상태 텍스트 라벨. **키보드만으로 전체 흐름·200% 확대·스크린리더는 NOT_RUN** |
-| AT-16 | PASS | `evidence/smoke_mcp.md` | 384차원·모델 revision·index_version 저장, 검색 평가 5/5 top-3, Resource 원문 일치, 인터뷰 공개 전 검색 제외 |
-| AT-17 | PASS | `evals/results/harness-v1-baseline.json` 8/8 | 8요소 고정 평가셋 PASS, LangSmith root trace 20건 중 20건이 run_id metadata로 매칭, run별 trace_id·token_usage 저장 |
+| AT-01 | 초대 입장 | PASS | pytest 6/6(1회용 교환·재사용 409·만료 410·동의 전 403·start 중복 시 E0 1회·보드 T1~T3·턴 0·09:00), UI 입장 |
+| AT-02 | 소유권·권한 | PASS | pytest(타인 세션 404·지원자 관리자 API 403·CSRF/Origin·내부 API 쿠키 불가), smoke_flow(종료 후 재열람 403·지원자 리포트 조회 불가) |
+| AT-03 | E0 분업 | PASS | smoke_flow: 불균형 제안 → 반문 → 균형 제안 확정 + '좋아요, 그렇게 가요!' + 보드 담당 반영. UI 분업 카드 확정 |
+| AT-04 | 턴 이벤트 발생 | PASS | smoke_flow: 턴 5 E1(10:30), 9 E2(13:00, T5 추가), 11 E2B, 13 이후 E3(승인 대기 중 보류 후 발생), 16 E3B, 17 E4(16:50, T4 추가), 고정 대사, 타임라인 E0~E4 순서 |
+| AT-05 | E2B 조건부 | PASS | 세션 A: 아무도 요청 안 함 → E2B 발생 / 세션 B: E2에서 요청 → E2B skipped, 다음 E3 |
+| AT-06 | 서윤 반문 1회 | PASS | 세션 A·B 모두 "제가 하는 게 맞을까요"가 정확히 1회, 이유를 든 재요청 → '아 넵 그렇네요, 제가 할게요.' |
+| AT-07 | 승인 interrupt 후 재개 | PASS | PE-1 정정 → 승인 카드(T3 수정안) → 승인 전 무변경 → 승인 후 같은 run 재개·반영·'고쳤어요' → 같은 승인 재전송 무해. E2 변경 수정안 2건(T3·T2) 순차 승인. UI 동일 |
+| AT-08 | 관찰 코드 기록 | PASS | smoke_flow 리포트에 CO+1, PL+1, CO+2, CO+5, PL+3, CO·N1, AD+1, PL+2, CO+6, CO+4, CO+3, HO+1, HO+2, HO+3, RS+2 기록, 부정 코드(CO-2·AD-1·HO-1·HO-2) 미기록. 모든 코드에 근거 연결. smoke_mcp: 코드북 밖 코드 거절·멱등 |
+| AT-09 | 리포트 생성 | PASS | DB job으로 READY, 5역량, '관찰 기회 없음' 표시(UI 단축 흐름의 적응성·정직), 근거 원문 = 지원자 메시지 그대로, 심어둔 오류 처리 이력(PE-1 서윤·PE-2 지원자), 점수·등급·합불 없음. 실패 후 '다시 생성'은 이번에 실패를 주입해 보지 않아 **미검증**(코드 경로만 유지) |
+| AT-10 | 재시작 복구 | PASS | restart_resume: 승인 대기 중 전체 재시작 → 승인 복원 → 같은 thread 재개, T3 v1→v2, 서윤 revision 1·receipt 1·'고쳤어요' 1 |
+| AT-11 | MCP 오류 처리 | PASS | smoke_mcp: 잘못된 오류 ID NOT_FOUND, 다른 세션 근거 NOT_FOUND, capability 없음 FORBIDDEN, audience 불일치 FORBIDDEN, 승인 없는 변경 거절, 다른 세션 ID 인자 거절, gateway 무응답 → TIMEOUT(retryable) |
+| AT-12 | MCP 계약 | PASS | smoke_mcp 35/35: business 7개 도구·주석, get_scenario에 정답 없음, get_next_event turns_until, get_planted_error confidential, rag search_docs·search_criteria, Resource(sc-a), Prompt 2개(플래그 주입), 검색 평가셋 5/5, 코드북 비공개 |
+| AT-13 | SSE | PASS | smoke_flow: Last-Event-ID 재연결 시 이후 이벤트만 순서대로 재생. UI는 SSE로 대화·승인 카드 갱신 |
+| AT-14 | Harness 8요소 | PASS | eval_harness `sc-a-final` 8/8 → [../evals/results/harness-v1-sc-a-final.json](../evals/results/harness-v1-sc-a-final.json). H-OBS: trace_id 17/17, LangSmith 매칭 17/17. token_usage는 fixture라 0 |
+| AT-15 | 디브리핑 | PASS | 연출 안내 문구, 소감 1회 저장, 리포트 조회 시 병합(smoke_flow·UI) |
+| AT-16 | 대기열 제거 | PASS | `infra/check-no-queue.sh` 0건(lock 파일 제외 — `package-lock.json`의 integrity 해시에 우연히 포함된 문자열, 사용자 승인). DB 컨테이너만으로 전체 기동·health ok |
+| AT-17 | 실제 LLM 1회 시연 | **미검증** | `.env`에 `OPENAI_API_KEY` 없음. live 분류기·페르소나 응답·리포트 요약 경로는 실행하지 않음 |
 
-## 가산점: 대기열 (RabbitMQ)
+UI(실제 브라우저, [ui_check.py](ui_check.py), 시스템 Chrome headless): 9/9 PASS, 콘솔 오류 0. 캡처: [screens/](screens/) 01 입장 · 02 과제 안내 · 03 E0 분업 카드 · 04 태스크 보드 · 05 공유 문서(작업본) · 06 승인 카드 · 07 반영 후 · 08 1024px · 09 디브리핑 · 10 관리자 세션 · 11 리포트.
 
-| 항목 | 판정 | 근거 |
-|---|---|---|
-| 작업을 큐에 넣어 처리 | PASS | 제출 트랜잭션의 DB jobs(아웃박스) → agent 릴레이 → `dayzero.report` → 컨슈머 → 리포트 READY (`evidence/smoke_queue.md`) |
-| 실패 작업 재시도 | PASS | 처리 불가 작업 주입 → 3초 지연 재시도 2회 → x-attempt=3으로 `dayzero.report.dlq` 이동, 리포트 FAILED 표시, 관리자 재생성 시 재처리 READY |
+## 확인한 한계
 
-## 스모크·평가 명령 (services/ 에서)
-
-```bash
-uv run pytest -q tests/test_m0_auth.py
-uv run python -m scripts.smoke_mcp
-uv run python -m scripts.smoke_flow --mode live          # agent가 LLM_MODE=live일 때
-uv run python -m scripts.eval_harness --suite harness-v1 --label baseline
-PYTHONPATH=. uv run python -m scripts.smoke_card_revise
-PYTHONPATH=. uv run python -m scripts.smoke_task
-PYTHONPATH=. uv run python -m scripts.smoke_queue
-uv run python -m scripts.restart_resume prepare   # → agent 재시작 → decide
-```
-
-## 알려진 한계
-
-- 리포트 LLM 해석은 live 모드에서만 생성되며(fixture는 RULES_FALLBACK), 해석은 'AI 추정'으로 사실과 분리 표시된다.
-- live 동료 초안의 출처 표기가 가끔 부정확하다. 지원자가 확인 카드에서 검토한다.
-- Docker Compose(`compose.yaml`)는 작성했지만 컨테이너 빌드·기동은 실행하지 않았다(NOT_RUN). 검증은 로컬 프로세스 기준이다.
-- 다중 시나리오 등 그 밖의 P1 항목은 하지 않았다(docs/ROADMAP_MULTI_COMPANY.md).
+- 시나리오 흐름의 분기 판정은 fixture 규칙 분류로만 확인했다. 지원자의 다양한 표현에 대한 오분류 테스트는 하지 않았다(PRD 11장 TODO).
+- 약속 이행(RS+2/RS-2), E4 보고 대조, 오류 '언급'(PL+3·CO-3) 판정은 단순 규칙이다(I7, PRD 11장).
+- `search_criteria`는 정의에 가까운 질의(예: "동료 산출물의 문제를 구체적으로 정정 요청" → CO+5, "변경 영향 확인 질문" → AD+1)는 맞지만, 느슨한 바꿔 말하기("동료 실수를 근거와 함께 고쳐 달라고 요청")에서는 top-3에 CO+5가 없었다.
+- Docker Compose 빌드·기동은 실행하지 않았다(로컬 프로세스 실행만 검증).
+- 리허설(D8, 17턴이 15~20분에 맞는지)은 하지 않았다.
+- 무응답 리마인드·자동 진행 중 E2 리마인드만 흐름에서 확인했고, 일반 리마인드(2턴)·자동 진행(+3턴)·E1 NO_RESPONSE·E0 기본 분업 fallback은 전용 테스트가 없다(코드 경로만 존재).
