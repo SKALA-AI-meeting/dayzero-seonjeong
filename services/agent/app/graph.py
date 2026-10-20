@@ -96,15 +96,20 @@ ANSWER_RE = re.compile(r"(정답|답\s*알려|대신\s*(써|작성|결정|정해
 RECHECK_RE = re.compile(r"(유료|멤버십|결제|정책|재검토|다시\s*확인|확인해\s*(주|보)|맞나요|충돌|안\s*될|불가)")
 FEEDBACK_RE = re.compile(r"(피드백|봐\s*주|검토|확인\s*(해|하고|부탁|좀)|어떤가요|어때요|의견)")
 DOC_REF_RE = re.compile(r"(작성|섹션|\d\s*번|기획안|문서|초안|썼|적었)")
-REVISE_RE = re.compile(r"(수정|고쳐|고치|반영|업데이트|다시\s*(작성|써|정리)|바꿔|보완)")
+REVISE_RE = re.compile(r"(수정|고쳐|고치|반영|업데이트|다시\s*(작성|써|정리)|바꿔|보완|초안|작성|써\s*주|정리해)")
+PROMISE_RE = re.compile(r"(작성|수정|반영|정리|보완|업데이트)(해\s*)?(하겠|할게|해\s*볼게|해\s*드릴게|해서\s*공유)")
 ASK_RE = re.compile(r"(부탁|해\s*주|해줄|해주실|해\s*줘|주실\s*수|가능할까|할\s*수\s*있을까|해\s*달)")
 SECTION_WORDS = [("problem", ("문제 정의", "문제정의", "대상 사용자", "대상")), ("interview_evidence", ("인터뷰",)),
                  ("features", ("핵심 기능", "기능 제안")), ("similar_cases", ("사례", "유사 서비스", "비슷한 서비스")),
                  ("metrics_timeline", ("지표", "일정", "출시"))]
 
 
-def requested_sections(text: str, scen: dict) -> list[str]:
+def requested_sections(text: str, scen: dict, recent: list[str] | None = None) -> list[str]:
     secs = [sid for sid, words in SECTION_WORDS if any(w in text for w in words)]
+    for prev in reversed(recent or []):  # 섹션 언급이 없으면 최근 대화 주제에서 찾음(가장 최근 우선)
+        if secs:
+            break
+        secs = [sid for sid, words in SECTION_WORDS if any(w in prev for w in words)]
     if not secs:
         secs = list(scen.get("colleague_sections") or [])
         if scen.get("pivot_text") and any(w in text for w in ("공지", "변경", "대상", "방향")) and "problem" not in secs:
@@ -220,6 +225,20 @@ def section_draft(state: WorkState, section: str) -> str:
                   "- 출시 일정: 설계 → 개발 → 베타 순서로 진행하며 구체 일정은 개발 리드와 확정 필요 (지난주 회의록)"]
         return "\n".join(lines)
     pivot = (state["facts"]["ctx"].get("scenario_state") or {}).get("pivot_text")
+    if section == "features":
+        target = "3개월 이상 미참여 사용자" if pivot else "첫 모임 참가자"
+        return (f"- 다음 모임 일정 안내: 모임 종료 후 같은 모임의 다음 일정을 앱에서 안내 — 다음 일정을 놓쳤다는 의견 (사용자 인터뷰 요약), "
+                "'한바퀴'의 다음 모임 자동 안내 사례 (지난주 회의록)\n"
+                "- 첫 참가자 연결: 처음 온 참가자와 기존 참가자를 짝으로 연결 — 아는 사람이 없어 어색했다는 의견 (사용자 인터뷰 요약), "
+                "'같이달려'의 짝꿍 매칭 사례 (지난주 회의록)\n"
+                "- 출발 위치 안내는 동네 단위 공개 정책 범위 안에서만 검토 (운영 정책)\n"
+                "- 유료 혜택은 제외: 올해 유료 기능 출시 불가 (운영 정책)\n"
+                f"- 대상: {target}. 기능 선택과 우선순위는 담당자가 확정 필요")
+    if section == "interview_evidence":
+        return ("- 아는 사람이 없어 어색했다는 의견: INT-01, INT-03, INT-06 (사용자 인터뷰 요약)\n"
+                "- 다음 모임 일정을 놓쳤다는 의견: INT-02, INT-05, INT-07 (사용자 인터뷰 요약)\n"
+                "- 리더의 환영과 단톡방 초대가 재참여 의향으로 이어졌다는 의견: INT-04 (사용자 인터뷰 요약)\n"
+                "- 한계: 8명 인터뷰로 전체 사용자 의견 비중을 대표하지 않음 (사용자 인터뷰 요약)")
     if section == "problem":
         target = "3개월 이상 모임에 참여하지 않은 사용자(팀장 요구사항 변경)" if pivot else "첫 모임 참가자"
         return (f"- 대상 사용자: {target}\n"
@@ -403,7 +422,8 @@ def validate_output(state: WorkState) -> dict:
                           "지표 현황, 운영 정책, 회의록 중에 골라 주시면 정리해 드릴게요."}
     if intent == "revise_request":
         scen = state["facts"]["ctx"].get("scenario_state") or {}
-        secs = requested_sections(state["request"], scen)
+        recent = [m["content"] for m in state["facts"]["ctx"]["messages"][-5:-1]]
+        secs = requested_sections(state["request"], scen, recent)
         if not secs:
             return {"answer": "어느 섹션을 고치면 될지 알려 주시겠어요? 제가 맡은 섹션이 아직 없어서 바로 시작하기 어려워요."}
         r = gw.post(f"/runs/{state['run_id']}/followup", {"sections": secs, "instruction": state["request"][:2000]})
@@ -449,15 +469,37 @@ def validate_output(state: WorkState) -> dict:
             return {"answer": H.SAFE_FALLBACK, "output_rewrite_count": rewrites + 1, "error_code": "OUTPUT_VALIDATION"}
     if state.get("limited"):
         text += f"\n(도구 사용 한도 {state['limited']}에 도달해 여기까지만 확인했어요.)"
+    scen = state["facts"]["ctx"].get("scenario_state") or {}
+    if state["kind"] == "COLLEAGUE" and scen.get("split_confirmed") and PROMISE_RE.search(text):
+        recent = [m["content"] for m in state["facts"]["ctx"]["messages"][-5:-1]]
+        secs = requested_sections(state["request"] + " " + text, scen, recent)
+        r = gw.post(f"/runs/{state['run_id']}/followup", {"sections": secs, "instruction": state["request"][:2000]}) if secs else {"created": []}
+        if r.get("created"):
+            text += f"\n(지금 {', '.join(SECTION_TITLE[x] for x in r['created'])} 섹션 작성을 시작했어요. 완성되면 기획안 탭에서 확인 요청을 드릴게요.)"
+        elif not r.get("skipped"):
+            text = PROMISE_RE.sub("검토", text) + "\n(바로 작성할 섹션을 정하지 못했어요. 어느 섹션을 맡기실지 알려 주세요.)"
     out = {"answer": text, "output_rewrite_count": rewrites + (1 if problems else 0)}
     if intent == "policy_recheck" and re.search(r"(철회|제외|빼|맞지 않|충돌|수정|정정)", text):
         out["facts"] = {**state["facts"], "corrected": True}
     return out
 
 
+_DOC_NUMBERS: set[str] = set()
+
+
+def _public_doc_numbers() -> set[str]:
+    """Numbers stated in the shared company documents (e.g. 30일, 22%, 30,000명) are grounded facts."""
+    if not _DOC_NUMBERS:
+        from shared.config import DATA_DIR
+        for f in (DATA_DIR / "documents").glob("*.md"):
+            _DOC_NUMBERS.update(H.numbers_in(f.read_text(encoding="utf-8")))
+    return _DOC_NUMBERS
+
+
 def _allowed_numbers(state: WorkState) -> set[str]:
-    """Numbers present in tool results/request, plus pp differences derived from returned rates."""
+    """Numbers present in tool results/request/company documents, plus pp differences derived from returned rates."""
     allowed = set().union(*[H.numbers_in(r["payload"]) for r in state.get("tool_results", [])] or [set()])
+    allowed |= _public_doc_numbers()
     allowed |= H.numbers_in(state.get("request", ""))
     rates = [row["rejoin_rate"] for r in state.get("tool_results", []) if r["tool"] == "get_rejoin_metrics" and r["payload"]["ok"]
              for row in r["payload"]["data"]["rows"] if row["rejoin_rate"] is not None]
@@ -512,6 +554,8 @@ def write_section_live(state: WorkState, section: str, current: str) -> tuple[st
     user = (f"[섹션] {SECTION_TITLE.get(section, section)}\n[현재 섹션 내용]\n{current or '(비어 있음)'}\n"
             + (f"[지원자 수정 요청]\n{revise}\n" if revise else "")
             + (f"[팀장 요구사항 변경]\n{pivot}\n" if pivot else "")
+            + ("[최근 팀 대화 — 논의된 아이디어는 반영하되 근거 자료와 맞는지 확인]\n"
+               + "\n".join(f"({m['actor']}) {H.truncate_tokens(m['content'], 120)}" for m in state["facts"]["ctx"]["messages"][-8:]) + "\n")
             + f"[근거 자료]\n{H.truncate_tokens(evidence, 3000) or '(없음)'}\n\n{task}")
     deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
     ai = H.with_retries(lambda: llm().invoke([SystemMessage(system), HumanMessage(H.mask_pii(user))]), deadline=deadline)

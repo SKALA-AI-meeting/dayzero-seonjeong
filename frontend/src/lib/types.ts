@@ -8,14 +8,14 @@ export type Message = {
 };
 export type Task = {
   id: string; title: string; status: string; owner: Owner; template_key: string | null;
-  target_section: string | null; delegation_id: string | null; result: { summary?: string; citations?: Citation[] } | null; version: number;
+  target_section: string | null; delegation_id: string | null; result: { summary?: string; citations?: Citation[]; rejected?: boolean } | null; version: number;
 };
 export type Artifact = { id: string; sections: Record<string, string>; version: number };
 export type Approval = {
   id: string; run_id: string; tool_name: string; args: Record<string, unknown>; status: string; expires_at: string;
   before_after: { before?: string; after?: string; section?: string; task_id?: string }; delegation_id: string | null;
 };
-export type Run = { id: string; kind: string; status: string; error_code: string | null; result: unknown };
+export type Run = { id: string; kind: string; status: string; error_code: string | null; result: unknown; task_id?: string | null };
 export type Session = { id: string; status: string; phase: string; version: number; last_stream_seq: number };
 export type Snapshot = {
   session: Session; artifact: Artifact | null; tasks: Task[]; messages: Message[]; active_run: Run | null; active_runs: Run[];

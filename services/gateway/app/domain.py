@@ -141,6 +141,7 @@ def run_dto(r: dict | None) -> dict | None:
     if not r:
         return None
     return {"id": str(r["id"]), "kind": r["kind"], "status": r["status"], "error_code": r["error_code"],
+            "task_id": str(r["task_id"]) if r.get("task_id") else None,
             "result": r["result"], "trace_id": r["trace_id"], "trace_url": r["trace_url"]}
 
 

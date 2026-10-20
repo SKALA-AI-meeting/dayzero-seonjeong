@@ -183,9 +183,20 @@ def run_state(rid: str, body: RunStateIn):
             emit(c, sid, "RUN_STARTED", {"kind": r["kind"]}, run_id=rid)
         elif body.status in ("SUCCEEDED", "FAILED", "CANCELLED"):
             if r["kind"] == "DELEGATED" and r["task_id"] and body.status == "SUCCEEDED":
-                # 위임 작업 종료(승인 반영 또는 거절) → 지원자 검토 대기. DONE은 지원자 review만 결정.
-                t = one(c, "UPDATE tasks SET status='REVIEW', version=version+1 WHERE id=%s AND status='IN_PROGRESS' AND owner='COLLEAGUE' RETURNING *",
-                        (r["task_id"],))
+                # 승인해 반영 → 동료 담당 태스크 완료(확인 카드 승인이 곧 수락).
+                # 거절 → 진행 중으로 되돌려 지원자가 수정 방향을 남기고 다시 작성 요청할 수 있게 함.
+                decision = (body.result or {}).get("decision")
+                applied = decision == "APPROVE" and not (body.result or {}).get("error_code")
+                if applied:
+                    t = one(c, """UPDATE tasks SET status='DONE', version=version+1,
+                                  result=COALESCE(result,'{}'::jsonb) || '{"rejected": false}'::jsonb
+                                  WHERE id=%s AND owner='COLLEAGUE' AND status IN ('IN_PROGRESS','REVIEW') RETURNING *""", (r["task_id"],))
+                    if t:
+                        record_action(c, sid, "SYSTEM", "TASK_COMPLETED_BY_APPROVAL", str(t["id"]), {"run_id": rid})
+                else:
+                    t = one(c, """UPDATE tasks SET status=CASE WHEN owner='COLLEAGUE' THEN 'IN_PROGRESS' ELSE status END, version=version+1,
+                                  result=COALESCE(result,'{}'::jsonb) || jsonb_build_object('rejected', true)
+                                  WHERE id=%s RETURNING *""", (r["task_id"],))
                 if t:
                     emit(c, sid, "TASK_UPDATED", {"task": task_dto(t)}, run_id=rid)
             emit(c, sid, "DONE" if body.status == "SUCCEEDED" else "FAILED",

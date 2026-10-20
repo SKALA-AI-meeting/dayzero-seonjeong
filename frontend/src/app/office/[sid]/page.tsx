@@ -302,7 +302,8 @@ export default function Office() {
                 reloadArtifact={async () => (await refresh())?.artifact ?? null} onSaveState={setSave} />
             </div>
             <div id="panel-tasks" role="tabpanel" aria-labelledby="tab-tasks" hidden={workTab !== "tasks"}>
-              <TaskBoard tasks={snap.tasks} readOnly={submitted} onMove={moveTask} onReview={review} onRevoke={revoke} />
+              <TaskBoard tasks={snap.tasks} readOnly={submitted} onMove={moveTask} onReview={review} onRevoke={revoke}
+                workingTaskIds={new Set(snap.active_runs.filter((r) => r.kind === "DELEGATED" && ["QUEUED", "RUNNING"].includes(r.status) && r.task_id).map((r) => r.task_id!))} />
             </div>
             {workTab === "assistant" && (
               <div id="panel-assistant" role="tabpanel" aria-labelledby="tab-assistant" className="messenger" style={{ flex: 1, minHeight: 0 }}>

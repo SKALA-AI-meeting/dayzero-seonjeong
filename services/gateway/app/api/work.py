@@ -119,14 +119,17 @@ def review_task(sid: str, tid: str, body: ReviewIn, p: Principal = Depends(candi
         t = one(c, "SELECT * FROM tasks WHERE id=%s AND session_id=%s FOR UPDATE", (tid, sid))
         if not t:
             raise ApiError(404, "NOT_FOUND", "태스크를 찾을 수 없습니다")
-        if t["owner"] != "COLLEAGUE" or t["status"] != "REVIEW":
+        ok_state = t["status"] == "REVIEW" or (body.decision == "REVISE" and t["status"] in ("IN_PROGRESS", "DONE") and t["delegation_id"])
+        if not ok_state:
             raise ApiError(409, "VERSION_CONFLICT", "검토 대기 중인 동료 태스크만 검토할 수 있습니다")
         new_status = {"ACCEPT": "DONE", "REVISE": "IN_PROGRESS", "REJECT": "CANCELLED"}[body.decision]
+        if t["owner"] != "COLLEAGUE" and body.decision == "REVISE":
+            new_status = t["status"]
         run_id = None
         if body.decision == "REVISE":
             d = one(c, "SELECT * FROM delegations WHERE id=%s", (t["delegation_id"],))
             if not d or d["revoked_at"] or d["expires_at"] < now():
-                raise ApiError(409, "APPROVAL_EXPIRED", "위임이 만료되어 수정 요청을 할 수 없습니다. 새로 위임해 주세요")
+                raise ApiError(409, "APPROVAL_EXPIRED", "위임이 만료되어 수정 요청을 할 수 없습니다. 채팅으로 동료에게 다시 요청해 주세요")
             if one(c, """SELECT 1 FROM runs WHERE session_id=%s AND task_id=%s AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')""",
                    (sid, tid)):
                 raise ApiError(409, "RUN_BUSY", "이 태스크는 이미 동료가 작업 중입니다")
