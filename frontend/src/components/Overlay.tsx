@@ -4,6 +4,10 @@ import { Icon } from "@/components/Icon";
 
 function useFocusTrap(open: boolean, onEscape?: () => void) {
   const ref = useRef<HTMLDivElement>(null);
+  // onEscape는 렌더마다 새로 만들어지므로 ref로 보관한다. effect 의존성에 넣으면 입력할 때마다
+  // 포커스를 다시 잡아 한글 IME 조합이 끊긴다(자모 분리 입력 버그).
+  const escRef = useRef(onEscape);
+  escRef.current = onEscape;
   useEffect(() => {
     if (!open) return;
     const prev = document.activeElement as HTMLElement | null;
@@ -11,7 +15,8 @@ function useFocusTrap(open: boolean, onEscape?: () => void) {
     const sel = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select, [tabindex]:not([tabindex="-1"])';
     (el?.querySelector<HTMLElement>("[data-autofocus]") ?? el?.querySelector<HTMLElement>("h2") ?? el)?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && onEscape) { e.preventDefault(); onEscape(); }
+      if (e.isComposing) return;
+      if (e.key === "Escape" && escRef.current) { e.preventDefault(); escRef.current(); }
       if (e.key !== "Tab" || !el) return;
       const items = Array.from(el.querySelectorAll<HTMLElement>(sel));
       if (!items.length) return;
@@ -21,7 +26,7 @@ function useFocusTrap(open: boolean, onEscape?: () => void) {
     };
     document.addEventListener("keydown", onKey);
     return () => { document.removeEventListener("keydown", onKey); prev?.focus?.(); };
-  }, [open, onEscape]);
+  }, [open]);
   return ref;
 }
 
@@ -55,12 +60,14 @@ export function Drawer({ open, title, badge, kind = "doc", modal = true, onClose
   modal?: boolean; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode;
 }) {
   const ref = useFocusTrap(open && modal, onClose);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open || modal) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.isComposing) closeRef.current(); };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, modal, onClose]);
+  }, [open, modal]);
   if (!open) return null;
   return (
     <>
