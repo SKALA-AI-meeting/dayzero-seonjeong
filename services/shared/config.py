@@ -53,6 +53,11 @@ class Settings:
         self.langsmith_project = g("LANGSMITH_PROJECT", "dayzero-seonjeong-mvp")
         # E4(마감 전 브리핑)는 optional 이벤트. 기본 켬(설계서 D7)
         self.event_e4_enabled = g("EVENT_E4_ENABLED", "true").lower() != "false"
+        # 회사 기준(company-mcp): company_id=url 목록. gateway만 읽어 리포트 job에 URL을 넣는다(Agent는 URL만 받음)
+        self.company_mcp_urls = dict(kv.split("=", 1) for kv in g("COMPANY_MCP_URLS", "").split(",") if "=" in kv)
+        self.default_company_id = g("DEFAULT_COMPANY_ID", "") or next(iter(self.company_mcp_urls), "")
+        # dayzero-mcp(평가자용 근거 조회) 토큰. 값은 로그·문서에 남기지 않는다
+        self.dayzero_mcp_token = g("DAYZERO_MCP_TOKEN", "")
 
     @property
     def psycopg_dsn(self) -> str:
