@@ -71,6 +71,10 @@ export default function Office() {
 
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => {
+    document.documentElement.classList.add("exam-fullscreen");
+    return () => document.documentElement.classList.remove("exam-fullscreen");
+  }, []);
+  useEffect(() => {
     let seen = false;
     try { seen = !!localStorage.getItem(`dz-brief-${sid}`); } catch { /* storage unavailable */ }
     if (!seen) { setBriefOpen(true); setBriefRequired(true); }
