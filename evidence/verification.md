@@ -24,7 +24,7 @@
 | AT-04 | PASS | `smoke_flow` 분담 조정 1회·확정 | 조정 최대 3회, 확정 담당 태스크 반영, 동료 담당 섹션별 delegation/run 생성 |
 | AT-05 | PASS | `smoke_flow`, `scripts/smoke_card_revise.py` 7/7 | 승인 전 무변경, 거절 무변경, 승인 후 revision 1개, 중복 승인 무해, 다른 결정 409, 재수정 요청 시 미반영 + 새 카드 |
 | AT-06 | PARTIAL | 섹션 단위 stale 판정 코드·smoke 경로 | 확인 대기 중 대상 섹션 변경 시 APPROVAL_STALE 구현. **자동 테스트로 직접 재현은 안 함.** 사용자 결정으로 지원자 담당 섹션도 채팅으로 명시 요청하면 동료가 수정안을 낼 수 있음(승인 필수) — 기존 OUT_OF_SCOPE 기대와 다름 |
-| AT-07 | PASS | `smoke_flow` 제출·02:00 자동 제출 | snapshot 고정, 리포트 5영역 OBSERVED·근거 메시지와 시각, 분담 이력, score/grade/rank/pass/fail 없음, 디브리핑 7개 상황. live에서 LLM_WITH_RULES(관찰 영역에만 'AI 추정' 해석·후속 확인점, 판정 표현 차단) |
+| AT-07 | PASS | `smoke_flow` 제출·02:00 자동 제출 | snapshot 고정, 리포트 5영역 OBSERVED·근거 메시지와 시각, 분담 이력, score/grade/rank/pass/fail 없음. 제출 후 지원자에게는 종료 안내만 제공하고 세션·자료·원문·SSE 재열람 403(보안). live에서 LLM_WITH_RULES(관찰 영역에만 'AI 추정' 해석·후속 확인점, 판정 표현 차단) |
 | AT-08 | PASS | `evidence/at08_restart_resume.md` | agent 프로세스 종료·재기동 후 승인 대기 복원, 같은 thread_id로 재개, revision 1개·receipt 1개, 승인 2회 전송에도 중복 없음 |
 | AT-09 | PASS | M1 검증(프록시 경유 curl), 브라우저 실사용 | Last-Event-ID 재접속 시 이후 seq만 재전송, 타 세션 404. 15시 이후 SYSTEM_NOTICE/DOCUMENTS_UPDATED 구독 누락 수정 |
 | AT-10 | PARTIAL | `evals/results/harness-v1-baseline.json` H-REC | 재시도 로직(429 두 번 후 성공 3회, 503 지속 3회 후 실패, 비재시도 1회) 검증. 리포트 해석 실패 시 규칙 기반(RULES_FALLBACK) 유지 경로 구현. **실제 LLM에 429/503 주입, 리포트 LLM 실패 주입은 NOT_RUN** |

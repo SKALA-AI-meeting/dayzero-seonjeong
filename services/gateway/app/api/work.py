@@ -235,17 +235,13 @@ EVENT_DESC = {
 
 @router.get("/sessions/{sid}/debrief")
 def debrief(sid: str, p: Principal = Depends(principal)):
+    """제출 후 지원자에게는 종료 안내만 제공한다(시험 내용·연출 상황 비공개)."""
     with tx(dsn()) as c:
-        s = read_session(c, sid, p)
+        s = read_session(c, sid, p, allow_closed=True)
         if s["status"] != "SUBMITTED":
             raise ApiError(403, "FORBIDDEN", "제출 후에 확인할 수 있습니다")
-        occ = {o["event_id"]: o for o in all_(c, "SELECT event_id, occurred_at_min FROM event_occurrences WHERE session_id=%s", (sid,))}
-    return {"occurred_events": [{"event_id": e, "time": t, "description": d} for e, (t, d) in EVENT_DESC.items() if e in occ],
-            "not_triggered": [{"event_id": e, "time": t, "description": d, "status": "제출 시점까지 도달하지 않음"}
-                              for e, (t, d) in EVENT_DESC.items() if e not in occ],
-            "recording_notice": ("오늘 과제에는 모든 지원자에게 같은 시각에 일어나도록 미리 정해 둔 상황들이 포함되어 있었습니다. "
-                                 "메시지, 업무 분담, 태스크 상태, 문서 변경 이력, AI 어시스턴트 사용 내역이 기록되었습니다. "
-                                 "리포트는 점수·등급·합격 여부를 만들지 않으며, 관찰된 행동과 근거만 정리해 사람이 판단합니다.")}
+    return {"status": "SUBMITTED", "submitted_at": s["submitted_at"].isoformat() if s["submitted_at"] else None,
+            "message": "기획안이 제출되었습니다. 오늘 시험 수고하셨습니다."}
 
 
 class AdvanceIn(Strict):

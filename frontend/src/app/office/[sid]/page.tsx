@@ -56,6 +56,7 @@ export default function Office() {
       if (s.session.status === "CREATED") router.replace("/join");
       return s;
     } catch (e) {
+      if (e instanceof ApiError && e.code === "SESSION_CLOSED") { router.replace(`/debrief/${sid}`); return null; }
       setFatal(e instanceof ApiError && (e.status === 401 || e.status === 404)
         ? "이 작업 공간에 접근할 수 없습니다. 초대 링크로 다시 입장해 주세요." : "작업 공간을 불러오지 못했습니다. 새로고침해 주세요.");
       return null;

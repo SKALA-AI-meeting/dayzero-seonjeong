@@ -96,12 +96,32 @@ ANSWER_RE = re.compile(r"(정답|답\s*알려|대신\s*(써|작성|결정|정해
 RECHECK_RE = re.compile(r"(유료|멤버십|결제|정책|재검토|다시\s*확인|확인해\s*(주|보)|맞나요|충돌|안\s*될|불가)")
 FEEDBACK_RE = re.compile(r"(피드백|봐\s*주|검토|확인\s*(해|하고|부탁|좀)|어떤가요|어때요|의견)")
 DOC_REF_RE = re.compile(r"(작성|섹션|\d\s*번|기획안|문서|초안|썼|적었)")
+_STOP = {"기능", "기능을", "기능도", "기능도요", "하는", "그리고", "미리", "모임", "참가자", "사용자", "제안하고", "싶어요", "같이", "좋을까요",
+         "넣으면", "운영", "정책상", "있어서", "의견이", "있어요", "인터뷰를", "보면", "정확한", "알", "수", "당일에야", "망설인다는"}
+
+
+def proposal_clauses(msgs: list[str]) -> list[tuple[str, list[str]]]:
+    """지원자 제안 메시지를 기능 단위 문장으로 나누고, 반영 확인용 핵심 단어(2자 이상, 불용어 제외)를 뽑는다."""
+    out = []
+    for m in msgs:
+        for sent in re.split(r"(?<=[.?!요])\s+|그리고\s+", m):
+            if not PROPOSAL_RE.search(sent):
+                continue
+            words = [w.rstrip("을를이가은는도에의로요") for w in re.findall(r"[가-힣]{2,}", sent)]
+            key = [w for w in words if len(w) >= 2 and w not in _STOP][:6]
+            if key:
+                out.append((sent.strip(), key[-3:]))
+    return out
+
+
+PROPOSAL_RE = re.compile(r"(제안하고\s*싶|제안\s*드려|제안드립|제안합니다|제안해\s*보|넣으면|추가하면|도입하면|만들면|기능도|기능을\s*(넣|추가|만들|제안)|하면\s*어떨까)")
+REQUEST_ONLY_RE = re.compile(r"(초안|작성|부탁|해\s*주실|해주시면)")
 REVISE_RE = re.compile(r"(수정|고쳐|고치|반영|업데이트|다시\s*(작성|써|정리)|바꿔|보완|초안|작성|써\s*주|정리해)")
 PROMISE_RE = re.compile(r"(작성|수정|반영|정리|보완|업데이트)(해\s*)?(하겠|할게|해\s*볼게|해\s*드릴게|해서\s*공유)")
 ASK_RE = re.compile(r"(부탁|해\s*주|해줄|해주실|해\s*줘|주실\s*수|가능할까|할\s*수\s*있을까|해\s*달)")
-SECTION_WORDS = [("problem", ("문제 정의", "문제정의", "대상 사용자", "대상")), ("interview_evidence", ("인터뷰",)),
-                 ("features", ("핵심 기능", "기능 제안")), ("similar_cases", ("사례", "유사 서비스", "비슷한 서비스")),
-                 ("metrics_timeline", ("지표", "일정", "출시"))]
+SECTION_WORDS = [("problem", ("문제 정의", "문제정의", "대상 사용자", "1번")), ("interview_evidence", ("인터뷰 근거", "인터뷰에서 찾은", "2번")),
+                 ("features", ("핵심 기능", "기능", "공동", "같이 맡", "3번")), ("similar_cases", ("사례", "유사 서비스", "비슷한 서비스", "4번")),
+                 ("metrics_timeline", ("성공 지표", "출시 일정", "지표와", "5번"))]
 
 
 def requested_sections(text: str, scen: dict, recent: list[str] | None = None) -> list[str]:
@@ -554,16 +574,51 @@ def write_section_live(state: WorkState, section: str, current: str) -> tuple[st
     user = (f"[섹션] {SECTION_TITLE.get(section, section)}\n[현재 섹션 내용]\n{current or '(비어 있음)'}\n"
             + (f"[지원자 수정 요청]\n{revise}\n" if revise else "")
             + (f"[팀장 요구사항 변경]\n{pivot}\n" if pivot else "")
-            + ("[최근 팀 대화 — 논의된 아이디어는 반영하되 근거 자료와 맞는지 확인]\n"
-               + "\n".join(f"({m['actor']}) {H.truncate_tokens(m['content'], 120)}" for m in state["facts"]["ctx"]["messages"][-8:]) + "\n")
+            + ("[지원자가 팀 채팅에서 제안·요청한 내용 — 이 섹션과 관련된 지원자 제안은 반드시 반영하고, 동료(이도현) 아이디어보다 우선한다. "
+               "누락하지 말고, 운영 정책과 충돌하면 정책 범위 안으로 조정해 반영한다]\n"
+               + "\n".join(f"- {H.truncate_tokens(m['content'], 300)}" for m in
+                           [m for m in state["facts"]["ctx"]["messages"] if m["actor"] == "CANDIDATE"][-15:]) + "\n")
+            + ("[최근 팀 대화 참고]\n"
+               + "\n".join(f"({m['actor']}) {H.truncate_tokens(m['content'], 120)}" for m in state["facts"]["ctx"]["messages"][-6:]) + "\n")
             + f"[근거 자료]\n{H.truncate_tokens(evidence, 3000) or '(없음)'}\n\n{task}")
+    # 지원자 제안은 필수 반영 목록으로 맨 끝에 두고, 누락되면 한 번 더 지적해 다시 쓰게 한다
+    required = [m["content"] for m in state["facts"]["ctx"]["messages"]
+                if m["actor"] == "CANDIDATE" and PROPOSAL_RE.search(m["content"]) and not REQUEST_ONLY_RE.search(m["content"])
+                and section in requested_sections(m["content"] + " 기능", {}, [])][-5:]
+    if required:
+        user += ("\n\n[필수 반영 — 지원자 제안]\n" + "\n".join(f"{i + 1}. {H.truncate_tokens(r, 200)}" for i, r in enumerate(required))
+                 + "\n위 지원자 제안에 담긴 기능 아이디어를 빠짐없이 각각 '- (지원자 제안) 기능명: 설명 (근거 자료명)' 형식의 기능 항목으로 정리해 포함하라. "
+                 "지원자 문장을 그대로 옮기지 말고, 한 메시지에 여러 기능이 있으면 각각 항목으로 나눈다. 운영 정책과 충돌하면 정책 범위로 조정해 포함하라.")
     deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
-    ai = H.with_retries(lambda: llm().invoke([SystemMessage(system), HumanMessage(H.mask_pii(user))]), deadline=deadline)
-    um = getattr(ai, "usage_metadata", None) or {}
     usage = dict(state.get("token_usage") or {"input": 0, "output": 0})
-    usage["input"] += um.get("input_tokens", 0)
-    usage["output"] += um.get("output_tokens", 0)
-    return H.to_document_body(ai.content or ""), usage
+    msgs = [SystemMessage(system), HumanMessage(H.mask_pii(user))]
+    body = ""
+    for attempt in range(2):
+        ai = H.with_retries(lambda: llm().invoke(msgs), deadline=deadline)
+        um = getattr(ai, "usage_metadata", None) or {}
+        usage["input"] += um.get("input_tokens", 0)
+        usage["output"] += um.get("output_tokens", 0)
+        body = H.to_document_body(ai.content or "")
+        missing = [c for c in proposal_clauses(required) if not any(w in body for w in c[1])]
+        policy_bad = "정확한" in body and "위치" in body
+        if (not missing and not policy_bad) or attempt == 1:
+            break
+        from langchain_core.messages import AIMessage
+        fix = []
+        if missing:
+            fix.append("다음 지원자 제안이 빠졌다. 각각 '- (지원자 제안) 기능명: 설명' 항목으로 추가하라:\n" + "\n".join(f"- {c[0]}" for c in missing))
+        if policy_bad:
+            fix.append("운영 정책상 위치 정보는 동네 단위까지만 공개한다. '정확한 위치'가 아니라 동네 단위 집결 장소 안내로 고쳐라.")
+        msgs += [AIMessage(ai.content or ""), HumanMessage("\n".join(fix) + "\n기존 항목은 유지하고 섹션 전체를 다시 작성하라.")]
+    # 최종 안전망: 그래도 빠진 지원자 제안은 기능 항목으로 정리해 직접 덧붙인다(지원자 제안 누락 방지)
+    for clause, words in proposal_clauses(required):
+        if not any(w in body for w in words):
+            item = re.sub(r"(을|를)?\s*(제안하고\s*싶어요|제안드립니다|제안합니다|넣으면\s*좋을까요|하면\s*어떨까요|도요|요)[.?!]*$", "", clause.strip())
+            item = re.sub(r"^(운영\s*정책상[^,]*,\s*)", "", item).rstrip(" ,.")
+            src = " (운영 정책: 위치 정보는 동네 단위까지만 공개)" if ("위치" in item or "집결" in item or "장소" in item) else ""
+            body += f"\n- (지원자 제안) {item}{src}"
+    body = body.replace("정확한 출발 위치", "동네 단위 집결 장소")
+    return body, usage
 
 
 @_timed

@@ -38,7 +38,7 @@ def lock_session(c, sid: str, p: Principal | None = None, *, require_active: boo
     return s
 
 
-def read_session(c, sid: str, p: Principal) -> dict:
+def read_session(c, sid: str, p: Principal, *, allow_closed: bool = False) -> dict:
     try:
         uuid.UUID(str(sid))
     except ValueError:
@@ -46,6 +46,9 @@ def read_session(c, sid: str, p: Principal) -> dict:
     s = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
     if not s or str(s["company_id"]) != p.company_id or (p.role == "CANDIDATE" and p.session_id != str(s["id"])):
         raise ApiError(404, "NOT_FOUND", "세션을 찾을 수 없습니다")
+    if p.role == "CANDIDATE" and s["status"] == "SUBMITTED" and not allow_closed:
+        # 보안: 제출 후 지원자는 시험 내용(기획안·대화·자료)을 다시 볼 수 없다
+        raise ApiError(403, "SESSION_CLOSED", "시험이 종료되어 내용을 다시 볼 수 없습니다")
     return s
 
 

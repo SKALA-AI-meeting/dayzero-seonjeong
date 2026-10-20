@@ -146,10 +146,10 @@ def main() -> int:
 
     check("01:50 마감 보고 이벤트", "T-DEADLINE" in advance("T-DEADLINE"))
     say("팀장님, 기획안 5개 섹션 중 문제 정의와 유사 사례를 정리했고 지금 마무리 중입니다.")
+    last_v = snap()["artifact"]["version"]
     check("02:00 자동 제출", "T-END" in advance("T-END"))
-    s = snap()
-    check("세션 SUBMITTED", s["session"]["status"] == "SUBMITTED")
-    late = c.patch(f"/sessions/{sid}/artifact", json={"base_version": s["artifact"]["version"], "section": "features", "content": "late", "source_refs": []})
+    check("세션 SUBMITTED", c.get(f"/sessions/{sid}/debrief").json().get("status") == "SUBMITTED")
+    late = c.patch(f"/sessions/{sid}/artifact", json={"base_version": last_v, "section": "features", "content": "late", "source_refs": []})
     check("제출 후 쓰기 차단", late.status_code == 409)
     t0 = time.time(); rep = {}
     while time.time() - t0 < 30:
@@ -165,7 +165,10 @@ def main() -> int:
     check("점수·등급·순위·합불 없음", not any(k in txt for k in ("'score'", "'grade'", "'rank'", "'pass'", "'fail'")))
     check("지원자는 리포트 조회 불가", c.get(f"/reports/{sid}").status_code == 403)
     deb = c.get(f"/sessions/{sid}/debrief").json()
-    check("디브리핑: 연출 상황 설명", len(deb["occurred_events"]) == 7, str([o["event_id"] for o in deb["occurred_events"]]))
+    check("종료 안내만 제공", deb.get("message", "").startswith("기획안이 제출되었습니다") and "occurred_events" not in deb, str(deb)[:120])
+    closed = [c.get(f"/sessions/{sid}").status_code, c.get(f"/sessions/{sid}/documents").status_code,
+              c.get(f"/sessions/{sid}/documents/operating-policy").status_code, c.get(f"/sessions/{sid}/events").status_code]
+    check("제출 후 지원자 시험 내용 재열람 차단(세션·자료 목록·원문·SSE 403)", closed == [403, 403, 403, 403], str(closed))
     failed = [n for n, ok, _ in res if not ok]
     print(f"\n결과: {len(res) - len(failed)}/{len(res)} PASS (session {sid})")
     return 1 if failed else 0

@@ -163,6 +163,8 @@ def get_document(sid: str, doc_id: str, p: Principal = Depends(principal)):
                 (doc_id, s["scenario_id"]))
         if not d:
             raise ApiError(404, "NOT_FOUND", "문서를 찾을 수 없습니다")
+        if p.role == "CANDIDATE" and s["status"] == "SUBMITTED":
+            raise ApiError(403, "SESSION_CLOSED", "시험이 종료되어 내용을 다시 볼 수 없습니다")
         if p.role == "CANDIDATE" and doc_id in hidden_document_ids(c, s):
             raise ApiError(403, "FORBIDDEN", "아직 공유되지 않은 자료입니다")
         if p.role == "CANDIDATE" and s["status"] == "ACTIVE":

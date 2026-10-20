@@ -130,7 +130,7 @@ def run_context(rid: str):
         sc = one(c, "SELECT public_brief FROM scenarios WHERE id=%s", (s["scenario_id"],))["public_brief"]
         channel = "ASSISTANT" if r["kind"] == "ASSISTANT" else "TEAM"
         msgs = all_(c, """SELECT * FROM (SELECT id, actor, content, created_at FROM messages
-                          WHERE session_id=%s AND channel=%s ORDER BY created_at DESC LIMIT 30) m ORDER BY created_at""",
+                          WHERE session_id=%s AND channel=%s ORDER BY created_at DESC LIMIT 60) m ORDER BY created_at""",
                     (sid, channel))
         art = one(c, "SELECT * FROM artifacts WHERE session_id=%s", (sid,))
         task = one(c, "SELECT * FROM tasks WHERE id=%s", (r["task_id"],)) if r["task_id"] else None

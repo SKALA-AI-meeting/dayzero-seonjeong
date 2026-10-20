@@ -29,7 +29,11 @@ function Join() {
     (async () => {
       if (!token) {
         const me = await loadMe();
-        if (me?.role === "CANDIDATE" && me.session_id) setSessionId(me.session_id);
+        if (me?.role === "CANDIDATE" && me.session_id) {
+          const closed = await api(`/sessions/${me.session_id}`).then(() => false).catch((err) => err instanceof ApiError && err.code === "SESSION_CLOSED");
+          if (closed) { router.replace(`/debrief/${me.session_id}`); return; }
+          setSessionId(me.session_id);
+        }
         else setError("초대 링크가 필요합니다.");
         return;
       }
@@ -37,8 +41,13 @@ function Join() {
         const r = await api<{ session_id: string; csrf_token: string }>("/auth/exchange", { method: "POST", json: { token } });
         setCsrf(r.csrf_token);
         setSessionId(r.session_id);
-        const s = await api<{ session: { status: string } }>(`/sessions/${r.session_id}`);
-        if (s.session.status !== "CREATED") router.replace(`/office/${r.session_id}`);
+        try {
+          const s = await api<{ session: { status: string } }>(`/sessions/${r.session_id}`);
+          if (s.session.status !== "CREATED") router.replace(`/office/${r.session_id}`);
+        } catch (err) {
+          if (err instanceof ApiError && err.code === "SESSION_CLOSED") router.replace(`/debrief/${r.session_id}`);
+          else throw err;
+        }
       } catch (e) {
         if (e instanceof ApiError && e.code === "ALREADY_USED") setError("이미 사용된 초대 링크입니다. 처음 입장한 브라우저에서 다시 열어 주세요.");
         else if (e instanceof ApiError && e.code === "INVITE_EXPIRED") setError("만료된 초대 링크입니다. 담당자에게 새 링크를 요청해 주세요.");
