@@ -541,6 +541,7 @@ def _allowed_numbers(state: WorkState) -> set[str]:
 def respond(state: WorkState) -> dict:
     etype = "ASSISTANT_MESSAGE" if state["kind"] == "ASSISTANT" else "COLLEAGUE_MESSAGE"
     content = state["answer"] if state["kind"] == "ASSISTANT" else H.to_chat_plain(state["answer"])
+    content = _guard_unreleased_schedule(state, content)
     payload: dict[str, Any] = {"content": content, "citations": _dedupe(state.get("citations", []))[:8]}
     if state.get("facts", {}).get("corrected"):
         payload["kind"] = "ERROR_CORRECTED"
@@ -548,6 +549,20 @@ def respond(state: WorkState) -> dict:
         payload["limited"] = True
     gw.event(state["run_id"], etype, payload, key="respond")
     return {}
+
+
+_SCHEDULE_RE = re.compile(r"(01\s*:\s*05|1\s*시\s*5\s*분|65\s*분|한\s*시\s*오\s*분)")
+
+
+def _guard_unreleased_schedule(state: WorkState, text: str) -> str:
+    """최종 출력 안전망: 00:50 지연 공지(T-DELAY) 전에는 인터뷰 공개 시각을 어떤 경로로도 말하지 않는다
+    (이전 대화에 남은 답변을 모델이 반복하는 경우 포함)."""
+    scen = (state.get("facts") or {}).get("ctx", {}).get("scenario_state") or {}
+    if "T-DELAY" in (scen.get("events") or []) or not _SCHEDULE_RE.search(text):
+        return text
+    kept = [ln for ln in re.split(r"(?<=[.!?요다])\s+", text) if not _SCHEDULE_RE.search(ln) and not ln.startswith(("그때", "그 시간"))]
+    note = "사용자 인터뷰 요약은 아직 잠겨 있고, 공유 시점은 아직 안내되지 않았어요."
+    return (note + " " + " ".join(kept)).strip()
 
 
 def _dedupe(cits: list[dict]) -> list[dict]:
