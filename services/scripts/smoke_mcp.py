@@ -67,38 +67,26 @@ async def main() -> int:
 
     async with client(S.business_mcp_url, btok) as b:
         tools = {t.name: t for t in (await b.list_tools()).tools}
-        check("business tools/list 5개", set(tools) == {"get_session_context", "get_funnel_metrics", "get_support_cases",
+        check("business tools/list 5개", set(tools) == {"get_session_context", "get_rejoin_metrics", "get_interview_notes",
                                                       "update_task_status", "patch_artifact_section"}, ",".join(sorted(tools)))
         ann = tools["patch_artifact_section"].annotations
         check("변경 도구 destructiveHint=true/readOnlyHint=false", bool(ann and ann.destructive_hint and not ann.read_only_hint))
-        ann = tools["get_funnel_metrics"].annotations
+        ann = tools["get_rejoin_metrics"].annotations
         check("조회 도구 readOnlyHint=true/destructiveHint=false", bool(ann and ann.read_only_hint and not ann.destructive_hint))
-
-        p = payload(await b.call_tool("get_funnel_metrics", {"period": "current", "dimension": "overall"}))
+        p = payload(await b.call_tool("get_rejoin_metrics", {"dimension": "overall"}))
         row = p["data"]["rows"][0]
-        check("AT-02 current/all 10000/3000/2200, 이탈 0.78",
-              (row["cart_sessions"], row["checkout_sessions"], row["orders"], row["abandonment_rate"]) == (10000, 3000, 2200, 0.78), str(row))
-        p = payload(await b.call_tool("get_funnel_metrics", {"period": "current", "dimension": "visitor", "filters": {"device": "mobile"}}))
-        got = {r["segment"]: (r["cart_sessions"], r["checkout_sessions"], r["orders"]) for r in p["data"]["rows"]}
-        check("AT-02 current/mobile × visitor 중첩 필터", got == {"new": (4500, 950, 550), "returning": (2500, 800, 640)}, str(got))
-        expected = {("baseline", "device"): {"mobile": (7000, 2100, 1680), "desktop": (3000, 1400, 1320)},
-                    ("current", "device"): {"mobile": (7000, 1750, 1190), "desktop": (3000, 1250, 1010)},
-                    ("current", "visitor"): {"new": (6000, 1560, 960), "returning": (4000, 1440, 1240)},
-                    ("current", "cart_value"): {"low": (5800, 1530, 1080), "high": (4200, 1470, 1120)}}
-        for (period, dim), exp in expected.items():
-            p = payload(await b.call_tool("get_funnel_metrics", {"period": period, "dimension": dim}))
-            got = {r["segment"]: (r["cart_sessions"], r["checkout_sessions"], r["orders"]) for r in p["data"]["rows"]}
-            check(f"AT-02 {period}/{dim} 검산", got == exp, str(got))
-        p = payload(await b.call_tool("get_funnel_metrics", {"period": "baseline", "dimension": "overall"}))
-        check("AT-02 baseline 결제 후 이탈 14.2857%", abs(p["data"]["rows"][0]["checkout_abandonment_rate"] - 0.142857) < 1e-6)
-
-        res = await b.call_tool("get_funnel_metrics", {"period": "current", "dimension": "overall", "filters": {"device": "tablet"}})
-        check("잘못된 enum → 오류(프로토콜 검증 또는 INVALID_ARGUMENT)", bool(res.is_error))
-        p = payload(await b.call_tool("get_support_cases", {"tags": ["shipping"], "limit": 5}))
-        check("get_support_cases shipping 2건(VOC-01,06)", [i["id"] for i in p["data"]["items"]] == ["VOC-01", "VOC-06"])
-        res = await b.call_tool("get_support_cases", {"tags": ["a", "b", "c", "d"], "limit": 5})
-        check("tags 4개 → INVALID_ARGUMENT", res.is_error and payload(res)["error"]["code"] == "INVALID_ARGUMENT")
-        res = await b.call_tool("patch_artifact_section", {"task_id": str(uuid.uuid4()), "section": "evidence", "base_version": 1,
+        check("전체 4000명 중 880명, 재참여율 0.22", (row["first_time_participants"], row["rejoined_within_30d"], row["rejoin_rate"]) == (4000, 880, 0.22), str(row))
+        p = payload(await b.call_tool("get_rejoin_metrics", {"dimension": "group_size"}))
+        got = {r["segment"]: r["rejoin_rate"] for r in p["data"]["rows"]}
+        check("모임 규모별 재참여율 31% / 24% / 15.5%", got == {"small": 0.31, "medium": 0.24, "large": 0.155}, str(got))
+        p = payload(await b.call_tool("get_rejoin_metrics", {"dimension": "group_size", "filters": {"group_size": "large"}}))
+        check("group_size 필터", [r["segment"] for r in p["data"]["rows"]] == ["large"])
+        res = await b.call_tool("get_rejoin_metrics", {"dimension": "region"})
+        check("잘못된 enum → 오류", bool(res.is_error))
+        res = await b.call_tool("get_interview_notes", {"tags": [], "limit": 8})
+        check("인터뷰 공개 전 get_interview_notes → NOT_FOUND", res.is_error and payload(res)["error"]["code"] == "NOT_FOUND",
+              payload(res)["error"]["code"] if res.is_error else "공개됨")
+        res = await b.call_tool("patch_artifact_section", {"task_id": str(uuid.uuid4()), "section": "similar_cases", "base_version": 1,
                                                            "content": "x", "citations": []})
         check("승인 없는 변경 도구 → 권한 오류(isError)", bool(res.is_error), payload(res)["error"]["code"])
 
@@ -122,12 +110,15 @@ async def main() -> int:
             check(f"AT-16 '{case['query']}' top-3 ⊇ {case['expected']}", hit and p["data"]["search_mode"] == "vector",
                   f"{docs} scores={[m['score'] for m in p['data']['matches']]}")
         check("AT-16 검색 평가 hit율", hits == len(evalset), f"{hits}/{len(evalset)}")
-        rr = await r.read_resource("doc://commerce-cart-v1/operating-policy")
+        rr = await r.read_resource("doc://moarun-rejoin-v1/operating-policy")
         text = rr.contents[0].text
-        check("resources/read 원문에 50,000원 무료배송 문장 포함", "최종 장바구니 금액 50,000원 이상은 무료배송이다" in text)
-        p = payload(await r.call_tool("search_docs", {"query": "무료배송 기준 금액", "top_k": 1}))
+        check("resources/read 원문에 유료 기능 정책 문장 포함", "루프랩은 올해 유료 기능을 출시하지 않는다" in text)
+        p = payload(await r.call_tool("search_docs", {"query": "유료 멤버십 출시 가능 여부", "top_k": 1}))
         m = p["data"]["matches"][0]
-        check("인용 quote가 원문 연속 부분 문자열", m["quote"] in (await r.read_resource(f"doc://commerce-cart-v1/{m['document_id']}")).contents[0].text)
+        check("인용 quote가 원문 연속 부분 문자열", m["quote"] in (await r.read_resource(f"doc://moarun-rejoin-v1/{m['document_id']}")).contents[0].text)
+        p = payload(await r.call_tool("search_docs", {"query": "아는 사람이 없어 어색했다는 인터뷰", "top_k": 5}))
+        check("인터뷰 공개 전 search_docs에서 user-interviews 제외",
+              all(m["document_id"] != "user-interviews" for m in p["data"]["matches"]), str([m["document_id"] for m in p["data"]["matches"]]))
 
     async with client(S.rag_mcp_url, btok) as r:  # wrong audience
         res = await r.call_tool("search_docs", {"query": "배송", "top_k": 1})

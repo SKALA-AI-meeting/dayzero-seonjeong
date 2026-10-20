@@ -9,18 +9,18 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.config import settings
+from shared.config import SECTION_IDS, settings
 from shared.db import J, all_, one, tx
 
 from ..auth import Principal, admin, candidate, principal
-from ..domain import (active_run, create_run, emit, enqueue_job, enqueue_policy_check, lock_session, now,
-                      read_session, record_action, task_dto)
+from ..domain import (active_run, create_run, elapsed_min, emit, insert_message, lock_session, now, read_session,
+                      record_action, task_dto)
+from ..timeline import apply_split, fire_due, submit_session
 from ..errors import ApiError
 from .sessions import EvidenceRef
 
 router = APIRouter()
-READ_TOOLS = ["get_funnel_metrics", "get_support_cases", "search_docs"]
-FILTER_ENUMS = {"device": {"mobile", "desktop"}, "visitor": {"new", "returning"}, "cart_value": {"low", "high"}}
+OWNERS = {"CANDIDATE", "COLLEAGUE", "JOINT"}
 
 
 def dsn() -> str:
@@ -31,55 +31,59 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DelegationIn(Strict):
-    source_message_id: str
-    title: str = Field(min_length=1, max_length=160)
-    target_section: Literal["evidence"]
-    allowed_tools: list[str] = Field(min_length=1, max_length=3)
-    filters: dict[str, str] = Field(default_factory=dict)
+class SplitIn(Strict):
+    decision: Literal["ACCEPT", "ADJUST"]
+    assignments: dict[str, Literal["CANDIDATE", "COLLEAGUE", "JOINT"]]
+    comment: str = Field(default="", max_length=1000)
 
 
-@router.post("/sessions/{sid}/delegations", status_code=201)
-def create_delegation(sid: str, body: DelegationIn, idempotency_key: str = Header(min_length=8, max_length=64),
-                      p: Principal = Depends(candidate)):
-    req_hash = hashlib.sha256(json.dumps(body.model_dump(), sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+@router.post("/sessions/{sid}/split")
+def split(sid: str, body: SplitIn, p: Principal = Depends(candidate)):
+    """업무 분담 수락/조정(DAYZERO_EXAM_SCENARIO §6 00:10). 조정은 최대 3회, 확정 시 태스크 보드 반영."""
     with tx(dsn()) as c:
-        lock_session(c, sid, p, require_active=True)
-        prev = one(c, "SELECT payload FROM actions WHERE session_id=%s AND kind='DELEGATION_CREATED' AND payload->>'idempotency_key'=%s",
-                   (sid, idempotency_key))
-        if prev:
-            if prev["payload"]["request_hash"] != req_hash:
-                raise ApiError(409, "ALREADY_USED", "같은 Idempotency-Key로 다른 요청을 보낼 수 없습니다")
-            return prev["payload"]["response"]
-        if set(body.allowed_tools) - set(READ_TOOLS):
-            raise ApiError(422, "VALIDATION_ERROR", "위임에는 조사 도구만 선택할 수 있습니다")
-        for k, v in body.filters.items():
-            if k not in FILTER_ENUMS or v not in FILTER_ENUMS[k]:
-                raise ApiError(422, "VALIDATION_ERROR", f"허용되지 않는 조사 범위: {k}={v}")
-        src = one(c, "SELECT id FROM messages WHERE id=%s AND session_id=%s", (body.source_message_id, sid))
-        if not src:
-            raise ApiError(404, "NOT_FOUND", "원본 메시지를 찾을 수 없습니다")
-        busy = active_run(c, sid)
-        if busy:
-            raise ApiError(409, "RUN_BUSY", "진행 중인 동료 작업이 끝난 뒤 위임할 수 있습니다")
-        t = one(c, """INSERT INTO tasks(session_id,title,status,owner,target_section) VALUES (%s,%s,'IN_PROGRESS','COLLEAGUE','evidence')
-                      RETURNING *""", (sid, body.title))
-        d = one(c, """INSERT INTO delegations(session_id,task_id,source_message_id,tool_allowlist,section_allowlist,constraints,expires_at)
-                      VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-                (sid, t["id"], body.source_message_id, J(sorted(body.allowed_tools)), J(["evidence"]),
-                 J({"filters": body.filters}), now() + timedelta(minutes=30)))
-        t = one(c, "UPDATE tasks SET delegation_id=%s WHERE id=%s RETURNING *", (d["id"], t["id"]))
-        run = create_run(c, sid, "DELEGATED", source_message_id=body.source_message_id, task_id=str(t["id"]),
-                         input_={"delegation_id": str(d["id"]), "filters": body.filters}, prompt_version="colleague-v1")
-        resp = {"delegation": {"id": str(d["id"]), "task_id": str(t["id"]), "tool_allowlist": d["tool_allowlist"],
-                               "section_allowlist": d["section_allowlist"], "expires_at": d["expires_at"].isoformat()},
-                "task": task_dto(t), "run_id": str(run["id"])}
-        seq = record_action(c, sid, "CANDIDATE", "DELEGATION_CREATED", str(d["id"]),
-                            {"idempotency_key": idempotency_key, "request_hash": req_hash, "response": resp,
-                             "source_message_id": body.source_message_id, "filters": body.filters})
-        emit(c, sid, "TASK_UPDATED", {"task": task_dto(t)}, run_id=str(run["id"]))
-        enqueue_policy_check(c, sid, seq)
-    return resp
+        s = lock_session(c, sid, p, require_active=True)
+        st = dict(s["policy_state"] or {})
+        sp = st.get("split")
+        if not sp:
+            raise ApiError(409, "VERSION_CONFLICT", "아직 업무 분담 제안이 없습니다")
+        if sp["confirmed"]:
+            raise ApiError(409, "VERSION_CONFLICT", "업무 분담이 이미 확정되었습니다")
+        if set(body.assignments) != set(SECTION_IDS):
+            raise ApiError(422, "VALIDATION_ERROR", "5개 섹션의 담당을 모두 지정해 주세요")
+        sc = one(c, "SELECT public_brief FROM scenarios WHERE id=%s", (s["scenario_id"],))["public_brief"]
+        if body.decision == "ADJUST":
+            if sp["adjustments_used"] >= sc["max_split_adjustments"]:
+                raise ApiError(409, "LIMIT_REACHED", "분담 조정은 최대 3회까지 가능합니다. 현재 안으로 확정해 주세요")
+            sp = {**sp, "assignments": body.assignments, "adjustments_used": sp["adjustments_used"] + 1}
+            st["split"] = sp
+            c.execute("UPDATE sessions SET policy_state=%s WHERE id=%s", (J(st), sid))
+            record_action(c, sid, "CANDIDATE", "SPLIT_ADJUSTED", sp["message_id"],
+                          {"assignments": body.assignments, "comment": body.comment, "count": sp["adjustments_used"],
+                           "elapsed_min": round(elapsed_min(s), 2)})
+            names = {"CANDIDATE": "지원자님", "COLLEAGUE": "저", "JOINT": "같이"}
+            titles = {t["key"]: t["title"] for t in sc["task_templates"]}
+            lines = "\n".join(f"- {titles[k]}: {names[v]}" for k, v in body.assignments.items())
+            left = sc["max_split_adjustments"] - sp["adjustments_used"]
+            text = (f"네, 말씀해 주신 대로 조정해 볼게요.\n{lines}\n"
+                    + ("이대로 괜찮으시면 확정해 주세요." if left == 0 else f"더 바꾸고 싶은 부분이 있으면 말씀해 주세요(조정 {left}회 남음)."))
+            m = insert_message(c, sid, "TEAM", "COLLEAGUE", text,
+                               meta={"kind": "SPLIT_RESPONSE", "split_proposal": {"assignments": body.assignments,
+                                                                                  "adjustments_used": sp["adjustments_used"],
+                                                                                  "max_adjustments": sc["max_split_adjustments"]}})
+            emit(c, sid, "COLLEAGUE_MESSAGE", {"message_id": str(m["id"]), "content": text, "citations": []})
+            return {"split": {k: sp[k] for k in ("assignments", "adjustments_used", "confirmed")}}
+        if body.assignments != sp["assignments"]:
+            raise ApiError(409, "VERSION_CONFLICT", "확정은 마지막으로 합의한 분담안으로만 할 수 있습니다. 바꾸려면 조정을 요청해 주세요")
+        st["split"] = {**sp, "confirmed": True}
+        s["policy_state"] = st
+        record_action(c, sid, "CANDIDATE", "SPLIT_CONFIRMED", sp["message_id"],
+                      {"assignments": body.assignments, "adjustments_used": sp["adjustments_used"],
+                       "elapsed_min": round(elapsed_min(s), 2)})
+        apply_split(c, s, body.assignments, actor_id=p.sub)
+        text = "좋아요, 이 분담으로 진행할게요. 제가 맡은 부분은 자료를 확인해서 초안을 만든 뒤 문서에 넣기 전에 확인 요청드릴게요."
+        m = insert_message(c, sid, "TEAM", "COLLEAGUE", text, meta={"kind": "SPLIT_RESPONSE"})
+        emit(c, sid, "COLLEAGUE_MESSAGE", {"message_id": str(m["id"]), "content": text, "citations": []})
+    return {"split": {"assignments": body.assignments, "adjustments_used": sp["adjustments_used"], "confirmed": True}}
 
 
 @router.delete("/sessions/{sid}/delegations/{did}", status_code=204)
@@ -127,14 +131,14 @@ def review_task(sid: str, tid: str, body: ReviewIn, p: Principal = Depends(candi
                 raise ApiError(409, "RUN_BUSY", "진행 중인 동료 작업이 있습니다")
         t = one(c, "UPDATE tasks SET status=%s, version=version+1 WHERE id=%s RETURNING *", (new_status, tid))
         refs = [r.model_dump() for r in body.source_refs]
-        seq = record_action(c, sid, "CANDIDATE", "TASK_REVIEWED", tid,
+        record_action(c, sid, "CANDIDATE", "TASK_REVIEWED", tid,
                             {"decision": body.decision, "comment": body.comment, "source_refs": refs, "owner": "COLLEAGUE"})
         if body.decision == "REVISE":
-            run = create_run(c, sid, "DELEGATED", task_id=tid, source_message_id=None,
-                             input_={"revise_comment": body.comment, "delegation_id": str(t["delegation_id"])})
+            run = create_run(c, sid, "DELEGATED", task_id=tid, source_message_id=None, prompt_version="colleague-v2",
+                             input_={"revise_comment": body.comment, "delegation_id": str(t["delegation_id"]),
+                                     "section": t["template_key"]})
             run_id = str(run["id"])
         emit(c, sid, "TASK_UPDATED", {"task": task_dto(t)}, run_id=run_id)
-        enqueue_policy_check(c, sid, seq)
     return {"task": task_dto(t), "run_id": run_id}
 
 
@@ -175,10 +179,9 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
         c.execute("UPDATE runs SET status='QUEUED', updated_at=now() WHERE id=%s", (run["id"],))
         c.execute("UPDATE jobs SET status='QUEUED', available_at=now(), lease_until=NULL, input=input || %s WHERE run_id=%s",
                   (J({"resume": resume, "approval_id": aid}), run["id"]))
-        seq = record_action(c, sid, "CANDIDATE", "APPROVAL_DECIDED", aid, {"decision": body.decision, "stale": want == "REJECTED_STALE"})
+        record_action(c, sid, "CANDIDATE", "APPROVAL_DECIDED", aid, {"decision": body.decision, "stale": want == "REJECTED_STALE"})
         emit(c, sid, "APPROVAL_DECIDED", {"approval_id": aid, "decision": body.decision, "stale": want == "REJECTED_STALE"},
              run_id=str(run["id"]))
-        enqueue_policy_check(c, sid, seq)
     if want == "REJECTED_STALE":
         raise ApiError(409, "APPROVAL_STALE", "승인 대기 중 기획안이 변경되어 이 제안은 무효가 되었습니다. 변경 없이 종료합니다")
     return {"run_id": str(run["id"]), "status": "QUEUED"}
@@ -198,33 +201,22 @@ def submit(sid: str, body: SubmitIn, p: Principal = Depends(candidate)):
             return {"session_status": "SUBMITTED", "report_id": str(r["id"])}
         if s["status"] != "ACTIVE":
             raise ApiError(403, "FORBIDDEN", "시작하지 않은 세션입니다")
-        art = one(c, "SELECT * FROM artifacts WHERE session_id=%s FOR UPDATE", (sid,))
+        art = one(c, "SELECT version FROM artifacts WHERE session_id=%s", (sid,))
         if art["version"] != body.base_version:
             raise ApiError(409, "VERSION_CONFLICT", "제출 전에 저장되지 않은 변경이 있습니다. 최신 기획안을 확인해 주세요")
-        final = one(c, "SELECT id FROM artifact_revisions WHERE artifact_id=%s AND version=%s", (art["id"], art["version"]))
-        c.execute("UPDATE sessions SET status='SUBMITTED', phase='CLOSED', submitted_at=now(), version=version+1 WHERE id=%s", (sid,))
-        runs = all_(c, "UPDATE runs SET status='CANCELLED', updated_at=now() WHERE session_id=%s AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL') RETURNING id", (sid,))
-        for r in runs:
-            c.execute("UPDATE jobs SET status='DONE' WHERE run_id=%s AND status IN ('QUEUED','LEASED')", (r["id"],))
-        c.execute("UPDATE approvals SET status='EXPIRED' WHERE session_id=%s AND status='PENDING'", (sid,))
-        c.execute("UPDATE delegations SET revoked_at=now() WHERE session_id=%s AND revoked_at IS NULL", (sid,))
-        seq = record_action(c, sid, "CANDIDATE", "SUBMITTED", str(art["id"]),
-                            {"artifact_version": art["version"], "empty_sections": [k for k, v in art["sections"].items() if not v.strip()],
-                             "summary": body.summary})
-        snapshot = {"artifact_version": art["version"], "artifact_revision_id": str(final["id"]) if final else None,
-                    "sections": art["sections"], "last_action_seq": seq,
-                    "message_ids": [str(m["id"]) for m in all_(c, "SELECT id FROM messages WHERE session_id=%s ORDER BY created_at", (sid,))],
-                    "tool_call_ids": [str(t["id"]) for t in all_(c, "SELECT id FROM tool_calls WHERE session_id=%s", (sid,))]}
-        rep = one(c, "INSERT INTO reports(session_id,status,source_snapshot) VALUES (%s,'PENDING',%s) RETURNING id", (sid, J(snapshot)))
-        enqueue_job(c, sid, "REPORT", f"report:{rep['id']}", input_={"report_id": str(rep["id"])})
-        emit(c, sid, "SESSION_DONE", {"report_id": str(rep["id"])})
-    return {"session_status": "SUBMITTED", "report_id": str(rep["id"])}
+        report_id = submit_session(c, s, actor="CANDIDATE", summary=body.summary)
+    return {"session_status": "SUBMITTED", "report_id": report_id}
 
 
 EVENT_DESC = {
-    "E-CONSTRAINT": "기획안 대안에 운영 정책과 관련된 표현이 저장되었을 때 확인 질문을 드리는 상황",
-    "E-VERIFY": "동료 조사 결과를 대조 자료 없이 수락했을 때 확인을 요청하는 상황",
-    "E-SEGMENT": "세그먼트 조사 전에 문제 정의를 처음 저장했을 때 조사 범위를 묻는 상황",
+    "T-SPLIT": ("00:10", "이도현 님이 업무 분담안을 제안했습니다. 수락하거나 다시 나눌 수 있었습니다."),
+    "T-HELP": ("00:30", "이도현 님이 유사 서비스 사례의 비교 기준에 대해 도움을 요청했습니다. 응답 방식은 자유였습니다."),
+    "T-DELAY": ("00:50", "사용자 인터뷰 요약 자료의 공유가 15분 지연되었습니다. 자료는 실제로 01:05까지 열람할 수 없었습니다."),
+    "T-INTERVIEW": ("01:05", "사용자 인터뷰 요약 자료가 공유되었습니다."),
+    "T-PIVOT": ("01:10", "팀장님이 기획 대상을 '3개월 이상 모임에 참여하지 않은 사용자'로 변경했습니다. 마감 시간은 그대로였습니다."),
+    "T-ERROR": ("01:30", "이도현 님이 운영 정책(올해 유료 기능 출시 불가)과 충돌하는 유료 멤버십 기능을 제안했습니다. "
+                         "이는 미리 설계된 상황이었습니다."),
+    "T-DEADLINE": ("01:50", "팀장님이 기획안 제출과 진행 상황 보고를 요청했습니다."),
 }
 
 
@@ -234,16 +226,37 @@ def debrief(sid: str, p: Principal = Depends(principal)):
         s = read_session(c, sid, p)
         if s["status"] != "SUBMITTED":
             raise ApiError(403, "FORBIDDEN", "제출 후에 확인할 수 있습니다")
-        occ = all_(c, "SELECT event_id, created_at FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
-        helps = all_(c, "SELECT help_id, count(*)::int AS n FROM tool_calls WHERE session_id=%s GROUP BY help_id", (sid,))
-    occurred = {o["event_id"] for o in occ}
-    return {"occurred_events": [{"event_id": o["event_id"], "description": EVENT_DESC[o["event_id"]],
-                                 "occurred_at": o["created_at"].isoformat()} for o in occ],
-            "not_triggered": [{"event_id": e, "description": d, "status": "조건 미충족"} for e, d in EVENT_DESC.items() if e not in occurred],
-            "help_delivered": helps,
-            "recording_notice": ("이번 과제에서는 메시지, 자료 열람, 도구 사용, 위임·승인, 기획안 수정 같은 실제 행동이 기록되었습니다. "
-                                 "동료의 확인 질문은 진행 상황에 따라 조건이 맞을 때만 나타나며, 나타나지 않은 상황은 평가에 불리하게 쓰이지 않습니다. "
-                                 "리포트는 점수나 합격 여부를 판정하지 않고, 최종 판단은 사람이 합니다.")}
+        occ = {o["event_id"]: o for o in all_(c, "SELECT event_id, occurred_at_min FROM event_occurrences WHERE session_id=%s", (sid,))}
+    return {"occurred_events": [{"event_id": e, "time": t, "description": d} for e, (t, d) in EVENT_DESC.items() if e in occ],
+            "not_triggered": [{"event_id": e, "time": t, "description": d, "status": "제출 시점까지 도달하지 않음"}
+                              for e, (t, d) in EVENT_DESC.items() if e not in occ],
+            "recording_notice": ("오늘 과제에는 모든 지원자에게 같은 시각에 일어나도록 미리 정해 둔 상황들이 포함되어 있었습니다. "
+                                 "메시지, 업무 분담, 태스크 상태, 문서 변경 이력, AI 어시스턴트 사용 내역이 기록되었습니다. "
+                                 "리포트는 점수·등급·합격 여부를 만들지 않으며, 관찰된 행동과 근거만 정리해 사람이 판단합니다.")}
+
+
+class AdvanceIn(Strict):
+    to_event: str
+
+
+@router.post("/sessions/{sid}/demo/advance")
+def demo_advance(sid: str, body: AdvanceIn, p: Principal = Depends(admin)):
+    """시연 전용 시간 이동(관리자, APP_ENV=development). 지원자 화면에는 노출하지 않는다."""
+    if settings().app_env != "development":
+        raise ApiError(404, "NOT_FOUND", "사용할 수 없는 기능입니다")
+    with tx(dsn()) as c:
+        s = lock_session(c, sid, p, require_active=True)
+        ev = one(c, "SELECT at_min FROM scenario_events WHERE id=%s", (body.to_event,))
+        if not ev:
+            raise ApiError(404, "NOT_FOUND", "이벤트를 찾을 수 없습니다")
+        st = dict(s["policy_state"] or {})
+        real = elapsed_min({**s, "policy_state": {}})
+        st["time_offset_min"] = max(float(st.get("time_offset_min", 0)), ev["at_min"] - real + 0.01)
+        c.execute("UPDATE sessions SET policy_state=%s WHERE id=%s", (J(st), sid))
+        s["policy_state"] = st
+        record_action(c, sid, "SYSTEM", "DEMO_TIME_ADVANCED", body.to_event, {"offset_min": st["time_offset_min"]})
+        fired = fire_due(c, s)
+    return {"fired": fired, "elapsed_min": round(elapsed_min(s), 2)}
 
 
 @router.get("/reports/{sid}")

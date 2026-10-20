@@ -13,14 +13,14 @@ from shared.config import settings
 from shared.db import J, all_, one, tx
 
 from ..auth import internal_service, issue_capability, verify_capability
-from ..business import ToolError, funnel_metrics, support_cases
-from ..domain import (artifact_dto, emit, enqueue_policy_check, insert_message, list_tasks, lock_session, now,
+from ..business import ToolError, interview_notes, rejoin_metrics
+from ..domain import (artifact_dto, hidden_document_ids, emit, insert_message, list_tasks, lock_session, now,
                       record_action, task_dto, to_jsonable)
 from ..errors import ApiError
 
 router = APIRouter(dependencies=[Depends(internal_service)])
 LEASE = timedelta(seconds=150)
-READ_TOOLS = {"get_session_context", "get_funnel_metrics", "get_support_cases", "search_docs", "read_resource"}
+READ_TOOLS = {"get_session_context", "get_rejoin_metrics", "get_interview_notes", "search_docs", "read_resource"}
 WRITE_TOOLS = {"update_task_status", "patch_artifact_section"}
 MESSAGE_EVENTS = {"COLLEAGUE_MESSAGE": ("TEAM", "COLLEAGUE"), "ASSISTANT_MESSAGE": ("ASSISTANT", "ASSISTANT"),
                   "MANAGER_EVENT": ("TEAM", "MANAGER")}
@@ -105,7 +105,9 @@ def capability(rid: str, body: CapabilityIn):
             if d:
                 delegation_id = str(d["id"])
                 tools = sorted(set(d["tool_allowlist"]) | (WRITE_TOOLS if body.approval_id else set()))
-    token, exp = issue_capability(audience=body.audience, session_id=str(r["session_id"]), run_id=rid,
+    with tx(dsn()) as c:
+        hidden = hidden_document_ids(c, one(c, "SELECT * FROM sessions WHERE id=%s", (r["session_id"],)))
+    token, exp = issue_capability(audience=body.audience, session_id=str(r["session_id"]), run_id=rid, hidden_documents=hidden,
                                   actor="COLLEAGUE" if r["kind"] != "ASSISTANT" else "ASSISTANT",
                                   allowed_tools=tools, delegation_id=delegation_id)
     if body.approval_id:
@@ -133,7 +135,12 @@ def run_context(rid: str):
         art = one(c, "SELECT * FROM artifacts WHERE session_id=%s", (sid,))
         task = one(c, "SELECT * FROM tasks WHERE id=%s", (r["task_id"],)) if r["task_id"] else None
         deleg = one(c, "SELECT * FROM delegations WHERE id=%s", (task["delegation_id"],)) if task and task["delegation_id"] else None
+        st = s["policy_state"] or {}
+        occurred = [o["event_id"] for o in all_(c, "SELECT event_id FROM event_occurrences WHERE session_id=%s", (sid,))]
+        hidden = hidden_document_ids(c, s)
     return to_jsonable({
+        "scenario_state": {"error_open": bool(st.get("error_open")), "events": occurred,
+                           "interviews_released": "user-interviews" not in hidden},
         "run": {"id": rid, "kind": r["kind"], "status": r["status"], "input": r["input"], "trace_id": r["trace_id"],
                 "source_message_id": r["source_message_id"], "task_id": r["task_id"], "thread_id": r["thread_id"]},
         "session": {"id": sid, "status": s["status"], "phase": s["phase"]},
@@ -206,9 +213,12 @@ def run_event(rid: str, body: EventIn):
         if body.type in MESSAGE_EVENTS:
             channel, actor = MESSAGE_EVENTS[body.type]
             cits = validate_citations(c, p.get("citations") or [], rid)
-            meta = {k: p[k] for k in ("delegation_proposal", "limited", "kind") if k in p}
-            if "delegation_proposal" in meta and meta["delegation_proposal"]:
-                meta["delegation_proposal"]["source_message_id"] = str(r["source_message_id"])
+            meta = {k: p[k] for k in ("limited", "kind") if k in p}
+            if meta.get("kind") == "ERROR_CORRECTED":
+                st = dict(s["policy_state"] or {})
+                st["error_open"] = False
+                c.execute("UPDATE sessions SET policy_state=%s WHERE id=%s", (J(st), sid))
+                record_action(c, sid, "COLLEAGUE", "ERROR_CORRECTED", str(r["source_message_id"]), {})
             m = insert_message(c, sid, channel, actor, str(p.get("content", ""))[:8000], citations=cits,
                                source_run_id=rid, meta=meta)
             p = {"message_id": str(m["id"]), "content": m["content"], "citations": cits}
@@ -240,15 +250,15 @@ def validate_citations(c, cits: list, rid: str) -> list:
         if not isinstance(ci, dict) or not ci.get("quote"):
             continue
         q = str(ci["quote"])
-        if ci.get("document_id") == "funnel_facts":
-            tc = one(c, "SELECT 1 FROM tool_calls WHERE run_id=%s AND tool_name='get_funnel_metrics' AND outcome='ok' LIMIT 1", (rid,))
+        if ci.get("document_id") == "rejoin_facts":
+            tc = one(c, "SELECT 1 FROM tool_calls WHERE run_id=%s AND tool_name='get_rejoin_metrics' AND outcome='ok' LIMIT 1", (rid,))
             if tc:
-                ok.append({"document_id": "funnel_facts", "chunk_id": None, "version": 1, "quote": q[:300]})
+                ok.append({"document_id": "rejoin_facts", "chunk_id": None, "version": 1, "quote": q[:300]})
             continue
-        if ci.get("document_id") == "support_cases":
-            row = one(c, "SELECT 1 FROM support_cases WHERE quote LIKE %s", (f"%{q}%",))
+        if ci.get("document_id") == "interview_notes":
+            row = one(c, "SELECT 1 FROM interview_notes WHERE quote LIKE %s", (f"%{q}%",))
             if row:
-                ok.append({"document_id": "customer-research", "chunk_id": None, "version": 1, "quote": q})
+                ok.append({"document_id": "user-interviews", "chunk_id": None, "version": 1, "quote": q})
             continue
         if ci.get("chunk_id"):
             row = one(c, "SELECT body, document_version FROM document_chunks WHERE id=%s", (ci["chunk_id"],))
@@ -353,12 +363,13 @@ def mcp_tool(tool_name: str, body: McpIn, request: Request):
                         "tasks": [{k: t[k] for k in ("id", "title", "status", "owner")} for t in list_tasks(c, sid)],
                         "artifact_version": art["version"] if art else None}
                 return tool_ok(data)
-            if tool_name == "get_funnel_metrics":
-                return tool_ok(funnel_metrics(c, body.args), [{"document_id": "funnel_facts", "chunk_id": None, "version": 1,
-                                                               "quote": f"cart-data-v1 {body.args.get('period')}/{body.args.get('dimension')}"}])
-            if tool_name == "get_support_cases":
-                data = support_cases(c, body.args)
-                return tool_ok(data, [{"document_id": "support_cases", "chunk_id": None, "version": 1, "quote": i["quote"]}
+            if tool_name == "get_rejoin_metrics":
+                return tool_ok(rejoin_metrics(c, body.args), [{"document_id": "rejoin_facts", "chunk_id": None, "version": 1,
+                                                               "quote": f"rejoin-data-v1 {body.args.get('dimension')}"}])
+            if tool_name == "get_interview_notes":
+                released = "user-interviews" not in hidden_document_ids(c, s)
+                data = interview_notes(c, body.args, released=released)
+                return tool_ok(data, [{"document_id": "interview_notes", "chunk_id": None, "version": 1, "quote": i["quote"]}
                                       for i in data["items"]])
             if tool_name in WRITE_TOOLS:
                 return execute_write(c, sid, run, cap, tool_name, body.args)
@@ -424,69 +435,49 @@ def tool_err(code: str, message: str, retryable: bool = False) -> dict:
     return {"ok": False, "data": None, "error": {"code": code, "message": message, "retryable": retryable}, "citations": []}
 
 
-# ---- conditional intervention (POLICY_CHECK job) -----------------------------------------
+# ---- exam timeline tick (agent ticker → gateway) -----------------------------------------
 
-class PolicyIn(Strict):
-    trigger_action_seq: int
-
-
-@router.post("/sessions/{sid}/policy-check")
-def policy_check(sid: str, body: PolicyIn):
-    from shared import policies as P
+@router.post("/timeline/tick")
+def timeline_tick():
+    from ..timeline import fire_due
+    fired: dict[str, list[str]] = {}
     with tx(dsn()) as c:
-        s = lock_session(c, sid)
-        if s["status"] != "ACTIVE":
-            return {"decision": "SKIPPED_INACTIVE"}
-        st = dict(s["policy_state"] or {})
-        checked = int(st.get("checked_seq", 0))
-        pending = list(st.get("pending", []))
-        occurred = {r["event_id"] for r in all_(c, "SELECT event_id FROM event_occurrences WHERE session_id=%s", (sid,))}
-        events = {e["id"]: e for e in all_(c, "SELECT * FROM scenario_events")}
-        new_actions = all_(c, "SELECT * FROM actions WHERE session_id=%s AND seq>%s AND actor='CANDIDATE' ORDER BY seq", (sid, checked))
-        for a in new_actions:
-            rev = None
-            if a["kind"] == "ARTIFACT_SAVED" and a["entity_id"]:
-                row = one(c, "SELECT sections FROM artifact_revisions WHERE id=%s", (a["entity_id"],))
-                rev = row["sections"] if row else None
-            seg = bool(one(c, """SELECT 1 FROM tool_calls WHERE session_id=%s AND tool_name='get_funnel_metrics' AND outcome='ok'
-                                 AND safe_args->>'dimension' <> 'overall' AND created_at <= %s LIMIT 1""", (sid, a["created_at"])))
-            ev = P.detect(a, revision_sections=rev, segment_metric_before=seg,
-                          review=a["payload"] if a["kind"] == "TASK_REVIEWED" else None)
-            if ev and ev not in occurred and all(p["event_id"] != ev for p in pending):
-                pending.append({"event_id": ev, "trigger_action_seq": a["seq"],
-                                "facts": {"action_kind": a["kind"], "section": a["payload"].get("section")}})
-        last_seq = int(st.get("last_intervention_seq", 0))
-        since = one(c, "SELECT count(*)::int AS n FROM actions WHERE session_id=%s AND seq>%s AND kind = ANY(%s)",
-                    (sid, last_seq, list(P.CANDIDATE_ACTIONS)))["n"]
-        cand, decision = P.choose(pending, occurred, {k: v["priority"] for k, v in events.items()},
-                                  s["auto_intervention_count"], since, last_seq > 0)
-        st["checked_seq"] = max([checked] + [a["seq"] for a in new_actions])
-        if cand:
-            record_action(c, sid, "SYSTEM", "POLICY_DECISION", cand["event_id"], {"decision": decision, **cand})
-        if decision == "EMIT":
-            e = events[cand["event_id"]]
-            m = insert_message(c, sid, "TEAM", "COLLEAGUE", e["payload"]["message"],
-                               meta={"kind": "INTERVENTION", "event_id": cand["event_id"], "help_id": "H1"})
-            c.execute("""INSERT INTO event_occurrences(session_id,event_id,trigger_action_seq,facts,response_message_id)
-                         VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-                      (sid, cand["event_id"], cand["trigger_action_seq"], J(cand["facts"]), m["id"]))
-            c.execute("UPDATE sessions SET auto_intervention_count=auto_intervention_count+1 WHERE id=%s", (sid,))
-            emit(c, sid, "COLLEAGUE_MESSAGE", {"message_id": str(m["id"]), "content": m["content"], "citations": []},
-                 admin_payload={"message_id": str(m["id"]), "content": m["content"], "event_id": cand["event_id"]})
-            pending = [p for p in pending if p["event_id"] != cand["event_id"]]
-            st["last_intervention_seq"] = one(c, "SELECT last_action_seq FROM sessions WHERE id=%s", (sid,))["last_action_seq"]
-        elif decision == "SUPPRESSED_BUDGET":
-            pending = [p for p in pending if p["event_id"] != cand["event_id"]]
-        st["pending"] = pending
-        c.execute("UPDATE sessions SET policy_state=%s WHERE id=%s", (J(st), sid))
-    return {"decision": decision, "event_id": cand["event_id"] if cand else None}
+        ids = [r["id"] for r in all_(c, "SELECT id FROM sessions WHERE status='ACTIVE'")]
+    for sid in ids:
+        with tx(dsn()) as c:
+            s = one(c, "SELECT * FROM sessions WHERE id=%s FOR UPDATE SKIP LOCKED", (sid,))
+            if s:
+                f = fire_due(c, s)
+                if f:
+                    fired[str(sid)] = f
+    return {"fired": fired}
 
 
-# ---- report (M4 최소 구현: 규칙 기반 사실 리포트) -----------------------------------------
+# ---- report: 5개 관찰 영역 규칙 기반 리포트 (DAYZERO_EXAM_SCENARIO §9) --------------------------
 
 class BuildIn(Strict):
     report_id: str
     mode: Literal["RULES_FALLBACK"]
+
+
+AREAS = [
+    ("RESPONSIBILITY", "책임감", ["T-DELAY", "T-DEADLINE"]),
+    ("RESPECT_COMMUNICATION", "존중·소통", ["T-ERROR"]),
+    ("COLLABORATION", "협력 태도", ["T-SPLIT", "T-HELP"]),
+    ("FLEXIBILITY", "유연성", ["T-PIVOT"]),
+]
+SITUATION = {
+    "T-SPLIT": "동료가 업무 분담안을 제안함", "T-HELP": "동료가 유사 서비스 비교 기준에 대해 도움을 요청함",
+    "T-DELAY": "사용자 인터뷰 자료 공유가 15분 지연됨", "T-PIVOT": "팀장이 기획 대상을 3개월 이상 미참여 사용자로 변경함",
+    "T-ERROR": "동료가 운영 정책과 충돌하는 유료 멤버십 기능을 제안함", "T-DEADLINE": "팀장이 제출과 진행 상황 보고를 요청함",
+}
+WINDOW_END = {"T-SPLIT": "T-HELP", "T-HELP": "T-DELAY", "T-DELAY": "T-INTERVIEW", "T-PIVOT": "T-ERROR",
+              "T-ERROR": "T-DEADLINE", "T-DEADLINE": "T-END"}
+CANDIDATE_KINDS = ("MESSAGE_SENT", "ARTIFACT_SAVED", "TASK_STATUS_CHANGED", "TASK_REVIEWED", "SPLIT_ADJUSTED",
+                   "SPLIT_CONFIRMED", "APPROVAL_DECIDED", "DOCUMENT_OPENED", "SUBMITTED")
+ACTION_TEXT = {"ARTIFACT_SAVED": "기획안 섹션 저장", "TASK_STATUS_CHANGED": "태스크 상태 변경", "TASK_REVIEWED": "동료 결과 검토",
+               "SPLIT_ADJUSTED": "업무 분담 조정 요청", "SPLIT_CONFIRMED": "업무 분담 확정", "APPROVAL_DECIDED": "동료 변경 승인/거절",
+               "DOCUMENT_OPENED": "자료 열람", "SUBMITTED": "기획안 제출"}
 
 
 @router.post("/reports/{sid}/build")
@@ -495,61 +486,76 @@ def build_report(sid: str, body: BuildIn):
         rep = one(c, "SELECT * FROM reports WHERE id=%s AND session_id=%s FOR UPDATE", (body.report_id, sid))
         if not rep or rep["status"] == "READY":
             return {"status": rep["status"] if rep else "NOT_FOUND"}
+        s = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
         snap = rep["source_snapshot"]
-        acts = all_(c, "SELECT id, seq, kind, entity_id, payload FROM actions WHERE session_id=%s AND seq<=%s ORDER BY seq",
-                    (sid, snap["last_action_seq"]))
-        tools = all_(c, "SELECT id, tool_name, help_id, outcome FROM tool_calls WHERE session_id=%s", (sid,))
-        occ = all_(c, "SELECT event_id, trigger_action_seq FROM event_occurrences WHERE session_id=%s", (sid,))
-        cand_msgs = [a for a in acts if a["kind"] == "MESSAGE_SENT"]
+        occ = {o["event_id"]: o for o in all_(c, "SELECT * FROM event_occurrences WHERE session_id=%s", (sid,))}
+        acts = all_(c, "SELECT * FROM actions WHERE session_id=%s AND seq<=%s ORDER BY seq", (sid, snap["last_action_seq"]))
+        msgs = {str(m["id"]): m for m in all_(c, "SELECT id, channel, actor, content, created_at FROM messages WHERE session_id=%s", (sid,))}
+        tools = all_(c, "SELECT t.id, t.tool_name, t.outcome, t.created_at, r.kind FROM tool_calls t JOIN runs r ON r.id=t.run_id WHERE t.session_id=%s", (sid,))
+        def mm(v: float | None) -> str:
+            v = int(v or 0)
+            return f"{v // 60:02d}:{v % 60:02d}"
 
-        def ref(a):
-            return {"kind": "action", "id": str(a["id"]), "field": "kind", "start": None, "end": None, "quote": None}
+        trig_seq = {e: o["trigger_action_seq"] for e, o in occ.items()}
 
-        def item(dim, facts, opportunity=True, used=True):
-            if not used:
-                return {"dimension": dim, "status": "NOT_USED", "facts": [], "interpretation": None, "limits": "사용하지 않음"}
-            if not opportunity:
-                return {"dimension": dim, "status": "NO_OPPORTUNITY", "facts": [], "interpretation": None, "limits": "관찰 기회 없음"}
-            if not facts:
-                return {"dimension": dim, "status": "INSUFFICIENT_EVIDENCE", "facts": [], "interpretation": None, "limits": "관련 행동 근거 부족"}
-            return {"dimension": dim, "status": "OBSERVED", "facts": facts, "interpretation": None,
-                    "limits": "자동 검출은 기록된 사실에 한정되며 의미 해석은 사람 검토가 필요함"}
+        def window(eid: str) -> list[dict]:
+            lo = trig_seq[eid]
+            hi = trig_seq.get(WINDOW_END.get(eid, ""), 10**12)
+            return [a for a in acts if a["actor"] == "CANDIDATE" and lo < a["seq"] < hi and a["kind"] in CANDIDATE_KINDS]
 
-        k = lambda kind: [a for a in acts if a["kind"] == kind]  # noqa: E731
-        opened = k("DOCUMENT_OPENED")
-        saves = k("ARTIFACT_SAVED")
-        reviews = k("TASK_REVIEWED")
-        delegs = k("DELEGATION_CREATED")
-        decisions = k("APPROVAL_DECIDED")
-        ai_used = bool(cand_msgs or delegs)
+        def fact(a: dict) -> dict:
+            if a["kind"] == "MESSAGE_SENT" and a["entity_id"] in msgs:
+                m = msgs[a["entity_id"]]
+                q = m["content"][:200]
+                return {"text": f"{'어시스턴트에' if m['channel'] == 'ASSISTANT' else '팀 채팅에'} 메시지: “{q}”",
+                        "at": mm(a["payload"].get("elapsed_min")) if a["payload"].get("elapsed_min") is not None else None,
+                        "refs": [{"kind": "message", "id": a["entity_id"], "field": "content", "start": 0,
+                                  "end": len(q), "quote": q}], "created_at": m["created_at"].isoformat()}
+            label = ACTION_TEXT.get(a["kind"], a["kind"])
+            extra = a["payload"].get("section") or a["entity_id"] if a["kind"] in ("ARTIFACT_SAVED", "DOCUMENT_OPENED") else ""
+            return {"text": f"{label}{f' ({extra})' if extra else ''}", "refs": [{"kind": "action", "id": str(a["id"]), "field": "kind",
+                    "start": None, "end": None, "quote": None}], "created_at": a["created_at"].isoformat()}
+
+        areas = []
+        for key, label, events in AREAS:
+            situations, facts, any_occ = [], [], False
+            for e in events:
+                if e not in occ:
+                    situations.append({"event_id": e, "situation": SITUATION[e], "status": "NO_OPPORTUNITY", "at": None})
+                    continue
+                any_occ = True
+                w = window(e)
+                situations.append({"event_id": e, "situation": SITUATION[e], "status": "OBSERVED" if w else "INSUFFICIENT_EVIDENCE",
+                                   "at": mm(occ[e]["occurred_at_min"])})
+                facts += [{**fact(a), "event_id": e} for a in w[:8]]
+            status = "NO_OPPORTUNITY" if not any_occ else ("OBSERVED" if facts else "INSUFFICIENT_EVIDENCE")
+            areas.append({"dimension": key, "label": label, "status": status, "situations": situations, "facts": facts,
+                          "interpretation": None,
+                          "limits": {"NO_OPPORTUNITY": "관찰 기회 없음(해당 상황이 발생하기 전에 제출됨)",
+                                     "INSUFFICIENT_EVIDENCE": "상황은 발생했으나 관련 행동 근거 부족",
+                                     "OBSERVED": "기록된 행동 사실만 정리했으며 의미 해석은 사람 검토가 필요함"}[status]})
+        asst = [a for a in acts if a["kind"] == "MESSAGE_SENT" and a["entity_id"] in msgs and msgs[a["entity_id"]]["channel"] == "ASSISTANT"]
+        asst_tools = [t for t in tools if t["kind"] == "ASSISTANT"]
+        areas.append({"dimension": "AI_UTILIZATION", "label": "AI 활용", "status": "OBSERVED" if asst else "NOT_USED",
+                      "situations": [{"event_id": None, "situation": "AI 어시스턴트는 시험 내내 자유롭게 사용할 수 있었음", "status": "OBSERVED" if asst else "NOT_USED", "at": None}],
+                      "facts": [fact(a) for a in asst[:10]],
+                      "usage": {"assistant_requests": len(asst), "assistant_tool_calls": len(asst_tools)},
+                      "interpretation": None,
+                      "limits": "사용량만으로 평가하지 않음" if asst else "AI 어시스턴트를 사용하지 않음(부정적 판단 근거 아님)"})
+        split_actions = [a for a in acts if a["kind"] in ("SPLIT_ADJUSTED", "SPLIT_CONFIRMED")]
         body_ = {
-            "schema_version": "1.0", "generation_mode": "RULES_FALLBACK", "policy_version": "help-v1", "scenario_version": 1,
-            "opportunities": [{"event_id": o["event_id"], "status": "TRIGGERED", "trigger_action_seq": o["trigger_action_seq"]} for o in occ]
-                             + [{"event_id": e, "status": "NOT_TRIGGERED", "trigger_action_seq": None}
-                                for e in ("E-CONSTRAINT", "E-VERIFY", "E-SEGMENT") if e not in {o["event_id"] for o in occ}],
-            "behavior": [
-                item("RESPONSIBILITY", [{"text": f"기획안 섹션을 직접 저장함({a['payload'].get('section')})", "refs": [ref(a)]} for a in saves][:5]),
-                item("COMMUNICATION", [{"text": "팀 채팅에 메시지를 보냄", "refs": [ref(a)]} for a in cand_msgs][:5]),
-                item("COLLABORATION", [{"text": "동료에게 조사를 위임함", "refs": [ref(a)]} for a in delegs]
-                     + [{"text": f"변경 제안에 {a['payload'].get('decision')} 결정함", "refs": [ref(a)]} for a in decisions], used=True),
-                item("FLEXIBILITY", [{"text": f"동료 결과를 {a['payload'].get('decision')} 처리함", "refs": [ref(a)]} for a in reviews],
-                     opportunity=bool(reviews) or bool(delegs)),
-                item("AI_UTILIZATION", [{"text": "AI 동료/어시스턴트에 요청함", "refs": [ref(a)]} for a in cand_msgs][:5], used=ai_used),
-            ],
-            "work_approach": [
-                item("PROBLEM_DEFINITION", [{"text": "problem 섹션을 작성함", "refs": [ref(a)]} for a in saves if a["payload"].get("section") == "problem"][:3]),
-                item("EVIDENCE_GATHERING", [{"text": f"자료 열람: {a['entity_id']}", "refs": [ref(a)]} for a in opened][:6]),
-                item("OPTION_PRIORITIZATION", [{"text": "options 섹션을 작성함", "refs": [ref(a)]} for a in saves if a["payload"].get("section") == "options"][:3]),
-                item("VALIDATION_PLAN", [{"text": "experiment 섹션을 작성함", "refs": [ref(a)]} for a in saves if a["payload"].get("section") == "experiment"][:3]),
-                item("REVISION", [{"text": f"동료 결과 검토({a['payload'].get('decision')})", "refs": [ref(a)]} for a in reviews][:3],
-                     opportunity=bool(reviews) or bool(delegs)),
-            ],
-            "help_delivered": [{"help_id": h, "tool_call_ids": [str(t["id"]) for t in tools if t["help_id"] == h]}
-                               for h in sorted({t["help_id"] for t in tools})],
-            "empty_sections": [s for s, v in snap["sections"].items() if not v.strip()],
+            "schema_version": "2.0", "generation_mode": "RULES_FALLBACK", "policy_version": "exam-v1", "scenario_id": "moarun-rejoin-v1",
+            "submitted_by": snap.get("submitted_by"),
+            "timeline": [{"event_id": e, "at": mm(o["occurred_at_min"]), "situation": SITUATION.get(e, e)} for e, o in
+                         sorted(occ.items(), key=lambda kv: kv[1]["trigger_action_seq"])],
+            "areas": areas,
+            "split_history": [{"kind": a["kind"], "assignments": a["payload"].get("assignments"), "at": mm(a["payload"].get("elapsed_min"))}
+                              for a in split_actions],
+            "final_artifact": {"version": snap["artifact_version"], "empty_sections": [k for k, v in snap["sections"].items() if not v.strip()]},
             "limitations": ["단일 가상 과제에서 관찰한 행동이며 성격·채용 성과를 단정하지 않음",
+                            "관찰되지 않은 행동은 추정하지 않음", "점수·등급·순위·합격 여부를 생성하지 않음",
                             "LLM 해석 없이 규칙 기반 사실만 포함(RULES_FALLBACK)"],
         }
-        c.execute("UPDATE reports SET status='READY', body=%s, attempts=attempts+1 WHERE id=%s", (J(body_), rep["id"]))
+        c.execute("UPDATE reports SET status='READY', body=%s, attempts=attempts+1 WHERE id=%s", (J(to_jsonable(body_)), rep["id"]))
         emit(c, sid, "REPORT_READY", {"report_id": str(rep["id"])})
     return {"status": "READY"}

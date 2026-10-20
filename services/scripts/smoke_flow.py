@@ -1,4 +1,9 @@
-"""E2E smoke through the web origin (cookies + CSRF): start → 조사 → 위임 → 거절/승인 → 검토 → 제출 → 리포트."""
+"""E2E smoke for the 루프랩 모아런 exam through the web origin (cookies + CSRF).
+
+킥오프 → 조사 → 업무 분담(조정 1회 후 확정) → 동료 담당 섹션 승인/거절 → 도움 요청 → 자료 지연/공개
+→ 대상 변경 → 동료 오류 지적·정정 → 마감 보고 → 02:00 자동 제출 → 리포트/디브리핑.
+시간은 관리자 전용 시연 기능(/demo/advance)으로 이동한다.
+"""
 from __future__ import annotations
 
 import argparse
@@ -19,100 +24,129 @@ def check(n, ok, d=""):
     res.append((n, ok, d)); print(("PASS " if ok else "FAIL ") + n + (f" — {d}" if d else ""), flush=True)
 
 
-def wait(c, sid, pred, timeout=60):
-    t = time.time()
-    while time.time() - t < timeout:
-        s = c.get(f"/sessions/{sid}").json()
-        if pred(s):
-            return s
-        time.sleep(1)
-    return c.get(f"/sessions/{sid}").json()
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(); ap.add_argument("--mode", default="fixture"); ap.add_argument("--base", default=S.app_origin)
     a = ap.parse_args()
     B = a.base + "/api/v1"; O = {"Origin": S.app_origin}
     adm = httpx.Client(base_url=B, headers=O, timeout=30)
-    csrf = adm.post("/auth/login", json={"email": S.seed_admin_email, "password": S.seed_admin_password}).json()["csrf_token"]
-    url = adm.post("/invites", json={"alias": f"smoke-{a.mode}"}, headers={"X-CSRF-Token": csrf}).json()["invite_url"]
+    adm.headers["X-CSRF-Token"] = adm.post("/auth/login", json={"email": S.seed_admin_email, "password": S.seed_admin_password}).json()["csrf_token"]
+    url = adm.post("/invites", json={"alias": f"smoke-{a.mode}"}).json()["invite_url"]
     c = httpx.Client(base_url=B, headers=O, timeout=30)
     e = c.post("/auth/exchange", json={"token": parse_qs(urlparse(url).query)["token"][0]}).json()
     sid = e["session_id"]; c.headers["X-CSRF-Token"] = e["csrf_token"]
     c.post(f"/sessions/{sid}/start", json={"consent": True})
-    health = httpx.get(B + "/health").json()
-    check("health mode 일치", health["mode"] == a.mode, str(health))
+    check("health mode 일치", httpx.get(B + "/health").json()["mode"] == a.mode)
 
-    # AT-03 조사
-    r = c.post(f"/sessions/{sid}/messages", json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM",
-                                                  "content": "current 기간 모바일 신규 고객의 장바구니 이탈 지표와 배송 관련 고객 문의를 조사해 주세요"})
-    check("AT-03 202", r.status_code == 202)
-    s = wait(c, sid, lambda s: any(m["actor"] == "COLLEAGUE" for m in s["messages"]) and not s["active_run"])
-    col = [m for m in s["messages"] if m["actor"] == "COLLEAGUE"]
-    check("AT-03 동료 근거 응답", bool(col) and len(col[-1]["citations"]) > 0, (col[-1]["content"][:160] if col else "응답 없음"))
-    with c.stream("GET", f"/sessions/{sid}/events?after_seq=0") as st:
-        types = []
-        for line in st.iter_lines():
-            if line.startswith("event: "): types.append(line[7:])
-            if "DONE" in types or len(types) > 30: break
-    check("AT-03 SSE RUN_STARTED→TOOL_START/END→COLLEAGUE_MESSAGE→DONE",
-          all(t in types for t in ("RUN_STARTED", "TOOL_START", "TOOL_END", "COLLEAGUE_MESSAGE", "DONE")), ",".join(types))
+    def snap():
+        return c.get(f"/sessions/{sid}").json()
 
-    # AT-04 위임 제안 → 확인
-    r = c.post(f"/sessions/{sid}/messages", json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM",
-                                                  "content": "모바일 신규 고객 조사는 도현님께 위임할게요"})
-    s = wait(c, sid, lambda s: any(m["meta"].get("delegation_proposal") for m in s["messages"]) and not s["active_run"])
-    prop = next((m["meta"]["delegation_proposal"] for m in s["messages"] if m["meta"].get("delegation_proposal")), None)
-    check("AT-04 위임 제안 카드", bool(prop), str(prop))
-    if not prop: return 1
-    art_v = s["artifact"]["version"]; key = uuid.uuid4().hex
-    body = {k: prop[k] for k in ("source_message_id", "title", "target_section", "allowed_tools", "filters")}
-    d1 = c.post(f"/sessions/{sid}/delegations", json=body, headers={"Idempotency-Key": key})
-    d2 = c.post(f"/sessions/{sid}/delegations", json=body, headers={"Idempotency-Key": key})
-    check("AT-04 delegation 201 + 같은 key 멱등", d1.status_code == 201 and d1.json() == d2.json(), str(d1.status_code))
-    s = wait(c, sid, lambda s: len(s["approvals"]) == 1)
-    check("AT-05 승인 대기 카드", len(s["approvals"]) == 1 and s["artifact"]["version"] == art_v)
-    check("AT-05 승인 전 문서 무변경", s["artifact"]["sections"]["evidence"] == "")
-    a1 = s["approvals"][0]
-    r = c.post(f"/sessions/{sid}/approvals/{a1['id']}/decision", json={"decision": "REJECT"})
-    s = wait(c, sid, lambda s: not s["active_run"] and any(t["owner"] == "COLLEAGUE" and t["status"] == "REVIEW" for t in s["tasks"]))
-    check("AT-05 거절 후 무변경", s["artifact"]["version"] == art_v and s["artifact"]["sections"]["evidence"] == "")
-    task = next(t for t in s["tasks"] if t["owner"] == "COLLEAGUE")
-    r = c.post(f"/sessions/{sid}/tasks/{task['id']}/review", json={"decision": "REVISE", "comment": "다시 제안해 주세요", "source_refs": []})
-    check("REVISE → 새 run", r.status_code == 200 and r.json()["run_id"], r.text[:120])
-    s = wait(c, sid, lambda s: len(s["approvals"]) == 1)
-    a2 = s["approvals"][0]
-    r1 = c.post(f"/sessions/{sid}/approvals/{a2['id']}/decision", json={"decision": "APPROVE"})
-    r2 = c.post(f"/sessions/{sid}/approvals/{a2['id']}/decision", json={"decision": "APPROVE"})
-    s = wait(c, sid, lambda s: not s["active_run"] and s["artifact"]["version"] > art_v)
-    check("AT-05 승인 후 revision 1개, 중복 결정 무해", s["artifact"]["version"] == art_v + 1 and r2.status_code == 202,
-          f"v{art_v}→v{s['artifact']['version']}")
-    check("AT-05 evidence에 동료 요약 반영", "동료 조사" in s["artifact"]["sections"]["evidence"])
-    r3 = c.post(f"/sessions/{sid}/approvals/{a2['id']}/decision", json={"decision": "REJECT"})
-    check("다른 결정 재전송 409", r3.status_code == 409, r3.text[:80])
+    def wait(pred, timeout=90):
+        t = time.time()
+        while time.time() - t < timeout:
+            s = snap()
+            if pred(s):
+                return s
+            time.sleep(1)
+        return snap()
 
-    # 직접 작성 + 제출
-    v = s["artifact"]["version"]
-    for sec, txt in (("problem", "모바일 신규 고객의 결제 진입 후 이탈 증가"), ("options", "배송비 사전 안내와 가입 마찰 완화 비교"),
-                     ("experiment", "배송비 안내 A/B, 성공지표 주문 전환, 보호지표 문의")):
-        v = c.patch(f"/sessions/{sid}/artifact", json={"base_version": v, "section": sec, "content": txt, "source_refs": []}).json()["artifact"]["version"]
-    t = next(t for t in c.get(f"/sessions/{sid}").json()["tasks"] if t["owner"] == "COLLEAGUE")
-    c.post(f"/sessions/{sid}/tasks/{t['id']}/review", json={"decision": "ACCEPT", "comment": "", "source_refs": []})
-    r = c.post(f"/sessions/{sid}/submit", json={"base_version": v, "summary": ""})
-    check("AT-07 제출 202", r.status_code == 202, r.text[:100])
-    late = c.patch(f"/sessions/{sid}/artifact", json={"base_version": v, "section": "risks", "content": "late", "source_refs": []})
-    check("AT-12 제출 후 쓰기 차단", late.status_code == 409, late.text[:80])
+    def advance(ev):
+        r = adm.post(f"/sessions/{sid}/demo/advance", json={"to_event": ev})
+        return r.json().get("fired", []) if r.status_code == 200 else r.text
+
+    def say(text, channel="TEAM"):
+        r = c.post(f"/sessions/{sid}/messages", json={"client_message_id": uuid.uuid4().hex, "channel": channel, "content": text})
+        kind = "ASSISTANT" if channel == "ASSISTANT" else "COLLEAGUE"
+        n = len([m for m in snap()["messages"] if m["actor"] == kind])
+        s = wait(lambda s: len([m for m in s["messages"] if m["actor"] == kind]) > n - (0 if r.status_code == 202 else 1)
+                 and not (s["active_run"] and s["active_run"]["kind"] == kind and s["active_run"]["status"] in ("QUEUED", "RUNNING")))
+        return r, [m for m in s["messages"] if m["actor"] == kind][-1]
+
+    s = snap()
+    check("00:00 킥오프: 팀장 브리프 + 동료 인사", [m["actor"] for m in s["messages"]][:2] == ["MANAGER", "COLLEAGUE"]
+          and "22%" in s["messages"][0]["content"])
+    check("기획안 5섹션", set(s["artifact"]["sections"]) == {"problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"})
+    check("2시간 타이머", s["clock"]["duration_min"] == 120 and s["clock"]["remaining_min"] > 119)
+    docs = {d["id"]: d for d in c.get(f"/sessions/{sid}/documents").json()["items"]}
+    check("회사 자료 5개, 인터뷰는 시작 시 잠김", len(docs) == 5 and not docs["user-interviews"]["available"])
+    check("인터뷰 직접 열람 403", c.get(f"/sessions/{sid}/documents/user-interviews").status_code == 403)
+
+    r, m = say("모임 규모별 재참여율 지표를 확인해 주실 수 있을까요?")
+    check("조사 요청 → 동료 근거 응답", r.status_code == 202 and len(m["citations"]) > 0, m["content"][:120])
+    r, m = say("모아런 운영 정책을 요약해 주세요", "ASSISTANT")
+    check("AI 어시스턴트 응답(문서 근거)", r.status_code == 202 and m["actor"] == "ASSISTANT", m["content"][:80])
+
+    check("00:10 업무 분담 이벤트", "T-SPLIT" in advance("T-SPLIT"))
+    s = snap()
+    check("분담 제안(기본안)", s["split"] and s["split"]["assignments"]["similar_cases"] == "COLLEAGUE" and not s["split"]["confirmed"])
+    adj = dict(s["split"]["assignments"]); adj["features"] = "CANDIDATE"
+    r = c.post(f"/sessions/{sid}/split", json={"decision": "ADJUST", "assignments": adj, "comment": "핵심 기능은 제가 먼저 잡아볼게요"})
+    check("분담 조정 1회 → 동료 응답", r.status_code == 200 and r.json()["split"]["adjustments_used"] == 1)
+    r = c.post(f"/sessions/{sid}/split", json={"decision": "ACCEPT", "assignments": adj})
+    check("분담 확정", r.status_code == 200 and r.json()["split"]["confirmed"])
+    s = wait(lambda s: len(s["approvals"]) == 2, 120)
+    owners = {t["template_key"]: t["owner"] for t in s["tasks"]}
+    check("태스크 보드 담당 반영", owners == adj, str(owners))
+    check("동료 담당 섹션 승인 카드 2개(승인 전 무변경)", len(s["approvals"]) == 2 and s["artifact"]["version"] == 1,
+          str([a["before_after"].get("section") for a in s["approvals"]]))
+    by_sec = {a["before_after"]["section"]: a for a in s["approvals"]}
+    c.post(f"/sessions/{sid}/approvals/{by_sec['similar_cases']['id']}/decision", json={"decision": "APPROVE"})
+    s = wait(lambda s: s["artifact"]["version"] == 2)
+    check("유사 사례 승인 → 반영", "같이달려" in s["artifact"]["sections"]["similar_cases"])
+    a2 = by_sec["metrics_timeline"]
+    c.post(f"/sessions/{sid}/approvals/{a2['id']}/decision", json={"decision": "REJECT"})
+    s = wait(lambda s: not s["approvals"])
+    check("성공 지표 초안 거절 → 무변경", s["artifact"]["sections"]["metrics_timeline"] == "")
+    r = c.patch(f"/sessions/{sid}/artifact", json={"base_version": s["artifact"]["version"], "section": "similar_cases",
+                                                    "content": "x", "source_refs": []})
+    check("지원자는 모든 섹션 직접 편집 가능(이력 기록)", r.status_code == 200)
+
+    check("00:30 도움 요청 이벤트", "T-HELP" in advance("T-HELP"))
+    r, m = say("네, 10분 정도 같이 봐요. 첫 참가자 적응 지원과 다음 일정 안내 방식으로 비교해 보면 어떨까요?")
+    check("도움 요청에 응답 → 동료 대화", r.status_code == 202, m["content"][:80])
+
+    check("00:50 자료 지연 안내", "T-DELAY" in advance("T-DELAY"))
+    docs = {d["id"]: d for d in c.get(f"/sessions/{sid}/documents").json()["items"]}
+    check("지연 중 인터뷰 잠김 + '01:05 공개 예정'", not docs["user-interviews"]["available"] and docs["user-interviews"]["notice"] == "01:05 공개 예정")
+    say("팀장님, 인터뷰 자료가 늦어져서 문제 정의를 지표 기준으로 먼저 정리하겠습니다.")
+
+    check("01:05 인터뷰 공개", "T-INTERVIEW" in advance("T-INTERVIEW"))
+    check("인터뷰 열람 가능", c.get(f"/sessions/{sid}/documents/user-interviews").status_code == 200)
+
+    check("01:10 대상 변경 이벤트", "T-PIVOT" in advance("T-PIVOT"))
+    v = snap()["artifact"]["version"]
+    r = c.patch(f"/sessions/{sid}/artifact", json={"base_version": v, "section": "problem",
+                                                    "content": "3개월 이상 모임에 참여하지 않은 사용자의 복귀", "source_refs": []})
+    check("변경된 요구사항 반영 저장", r.status_code == 200)
+
+    check("01:30 동료 오류 이벤트", "T-ERROR" in advance("T-ERROR"))
+    s = snap()
+    err = [m for m in s["messages"] if m["meta"].get("event_id") == "T-ERROR"]
+    check("유료 멤버십 제안 메시지(고정 사실)", bool(err) and "유료 멤버십" in err[0]["content"])
+    r, m = say("운영 정책에 올해 유료 기능은 출시하지 않는다고 되어 있지 않나요? 재검토 부탁드려요.")
+    check("지적 → 동료가 정책 재확인 후 정정", "정책" in m["content"] and m["meta"].get("kind") == "ERROR_CORRECTED", m["content"][:120])
+
+    check("01:50 마감 보고 이벤트", "T-DEADLINE" in advance("T-DEADLINE"))
+    say("팀장님, 기획안 5개 섹션 중 문제 정의와 유사 사례를 정리했고 지금 마무리 중입니다.")
+    check("02:00 자동 제출", "T-END" in advance("T-END"))
+    s = snap()
+    check("세션 SUBMITTED", s["session"]["status"] == "SUBMITTED")
+    late = c.patch(f"/sessions/{sid}/artifact", json={"base_version": s["artifact"]["version"], "section": "features", "content": "late", "source_refs": []})
+    check("제출 후 쓰기 차단", late.status_code == 409)
     t0 = time.time(); rep = {}
     while time.time() - t0 < 30:
         rep = adm.get(f"/reports/{sid}").json()
-        if rep.get("status") == "READY": break
+        if rep.get("status") == "READY":
+            break
         time.sleep(1)
-    check("AT-07 리포트 READY", rep.get("status") == "READY", rep.get("status", ""))
-    txt = str(rep.get("body", ""))
-    check("AT-07 score/rank/pass/fail 필드 없음", not any(k in txt for k in ("'score'", "'rank'", "'pass'", "'fail'")))
-    check("AT-11 지원자는 리포트 조회 불가", c.get(f"/reports/{sid}").status_code == 403)
-    deb = c.get(f"/sessions/{sid}/debrief")
-    check("디브리핑 200", deb.status_code == 200, str([o["event_id"] for o in deb.json().get("occurred_events", [])]))
+    body = rep.get("body") or {}
+    areas = {a["dimension"]: a["status"] for a in body.get("areas", [])}
+    check("리포트 5영역", set(areas) == {"RESPONSIBILITY", "RESPECT_COMMUNICATION", "COLLABORATION", "FLEXIBILITY", "AI_UTILIZATION"}, str(areas))
+    check("영역별 관찰 근거(메시지·시각)", all(v == "OBSERVED" for v in areas.values()), str(areas))
+    txt = str(body)
+    check("점수·등급·순위·합불 없음", not any(k in txt for k in ("'score'", "'grade'", "'rank'", "'pass'", "'fail'")))
+    check("지원자는 리포트 조회 불가", c.get(f"/reports/{sid}").status_code == 403)
+    deb = c.get(f"/sessions/{sid}/debrief").json()
+    check("디브리핑: 연출 상황 설명", len(deb["occurred_events"]) == 7, str([o["event_id"] for o in deb["occurred_events"]]))
     failed = [n for n, ok, _ in res if not ok]
     print(f"\n결과: {len(res) - len(failed)}/{len(res)} PASS (session {sid})")
     return 1 if failed else 0

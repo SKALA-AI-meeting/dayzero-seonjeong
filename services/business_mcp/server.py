@@ -18,14 +18,12 @@ from shared.config import settings
 from shared.mcp_common import READ, WRITE, capability_from, error, result
 
 mcp = MCPServer(name="business-mcp", version="0.1.0",
-                instructions="모아마켓 장바구니 퍼널 지표·고객 문의 조회와 위임된 evidence 변경 도구. 숫자는 세션 수, rate는 0~1.")
+                instructions="모아런 재참여율 지표·사용자 인터뷰 조회와, 분담된 동료 담당 섹션 변경 도구. 인원은 명, rate는 0~1.")
 TIMEOUT = 5.0
 
 
 class Filters(BaseModel):
-    device: Literal["mobile", "desktop"] | None = None
-    visitor: Literal["new", "returning"] | None = None
-    cart_value: Literal["low", "high"] | None = None
+    group_size: Literal["small", "medium", "large"] | None = None
 
 
 class Citation(BaseModel):
@@ -67,25 +65,23 @@ async def get_session_context(ctx: Context) -> t.CallToolResult:
 
 
 @mcp.tool(annotations=READ, description=(
-    "모아마켓 장바구니 퍼널 집계를 조회한다. period: baseline(2026-09-28~10-04) | current(2026-10-12~10-18). "
-    "dimension: overall | device | visitor | cart_value 로 group by. filters: device(mobile|desktop), "
-    "visitor(new|returning), cart_value(low<5만원|high≥5만원) AND 필터. 출력 rows는 segment, cart_sessions, "
-    "checkout_sessions, orders(세션 수)와 abandonment_rate=(cart-orders)/cart, "
-    "checkout_abandonment_rate=(checkout-orders)/checkout (0~1, 분모 0이면 null). 인과 효과는 알 수 없다. "
-    "오류: INVALID_ARGUMENT(허용되지 않는 enum)."))
-async def get_funnel_metrics(period: Literal["baseline", "current"],
-                             dimension: Literal["overall", "device", "visitor", "cart_value"],
-                             ctx: Context, filters: Filters | None = None) -> t.CallToolResult:
+    "모아런 첫 모임 참가자의 30일 내 재참여 지표를 조회한다(최근 분기, 단위: 명). dimension: overall | group_size "
+    "(첫 모임 규모 small=5명 이하, medium=6~10명, large=11명 이상). filters.group_size로 한 규모만 조회 가능. "
+    "출력 rows: segment, first_time_participants, rejoined_within_30d, rejoin_rate(0~1, 분모 0이면 null). "
+    "규모와 재참여의 인과 관계는 알 수 없다. 오류: INVALID_ARGUMENT."))
+async def get_rejoin_metrics(dimension: Literal["overall", "group_size"], ctx: Context,
+                             filters: Filters | None = None) -> t.CallToolResult:
     f = {k: v for k, v in (filters.model_dump() if filters else {}).items() if v}
-    return await forward("get_funnel_metrics", {"period": period, "dimension": dimension, "filters": f}, ctx, retries=2)
+    return await forward("get_rejoin_metrics", {"dimension": dimension, "filters": f}, ctx, retries=2)
 
 
 @mcp.tool(annotations=READ, description=(
-    "current 기간 고객센터 합성 문의 사례(VOC)를 태그로 조회한다. tags 최대 3개: shipping, transparency, signup, "
-    "friction, performance, checkout, coupon, comparison, deferred. 빈 배열이면 전체. limit 1~5. "
-    "확률표본이 아니므로 전체 원인 비중을 추정하면 안 된다. 오류: INVALID_ARGUMENT."))
-async def get_support_cases(ctx: Context, tags: list[str] | None = None, limit: int = 5) -> t.CallToolResult:
-    return await forward("get_support_cases", {"tags": tags or [], "limit": limit}, ctx, retries=2)
+    "첫 모임 참가자 8명의 사용자 인터뷰 발언을 태그로 조회한다. tags 최대 3개: awkward(아는 사람 없어 어색), "
+    "missed_schedule(다음 일정 놓침), pace, positive, host, time, location. 빈 배열이면 전체. limit 1~8. "
+    "인터뷰 자료가 공유되기 전에는 NOT_FOUND를 반환한다. 표본 조사가 아니므로 의견 비중을 일반화하지 않는다. "
+    "오류: NOT_FOUND, INVALID_ARGUMENT."))
+async def get_interview_notes(ctx: Context, tags: list[str] | None = None, limit: int = 8) -> t.CallToolResult:
+    return await forward("get_interview_notes", {"tags": tags or [], "limit": limit}, ctx, retries=2)
 
 
 @mcp.tool(annotations=WRITE, description=(
@@ -98,10 +94,12 @@ async def update_task_status(task_id: str, base_version: int, status: Literal["I
 
 
 @mcp.tool(annotations=WRITE, description=(
-    "위임받은 조사 결과를 기획안 evidence 섹션에 반영한다. section은 evidence만 허용. content는 사실 요약과 출처만. "
-    "변경마다 지원자 승인이 필요하며 승인된 인자와 다르면 거절된다. "
+    "업무 분담으로 동료가 맡은 기획안 섹션(similar_cases, metrics_timeline 등 분담 확정된 섹션)에 초안을 반영한다. "
+    "지원자 담당 섹션은 변경할 수 없다(OUT_OF_SCOPE). 변경마다 지원자 승인이 필요하며 승인된 인자와 다르면 거절된다. "
     "오류: APPROVAL_REQUIRED, APPROVAL_EXPIRED, OUT_OF_SCOPE, VERSION_CONFLICT."))
-async def patch_artifact_section(task_id: str, section: Literal["evidence"], base_version: int, content: str,
+async def patch_artifact_section(task_id: str,
+                                 section: Literal["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"],
+                                 base_version: int, content: str,
                                  citations: list[Citation], ctx: Context) -> t.CallToolResult:
     args = {"task_id": task_id, "section": section, "base_version": base_version, "content": content,
             "citations": [c.model_dump() for c in citations]}

@@ -124,9 +124,11 @@ def internal_service(request: Request) -> None:
 
 
 def issue_capability(*, audience: str, session_id: str, run_id: str, actor: str,
-                     allowed_tools: list[str], delegation_id: str | None) -> tuple[str, int]:
+                     allowed_tools: list[str], delegation_id: str | None,
+                     hidden_documents: list[str] | None = None) -> tuple[str, int]:
     exp = int(time.time()) + CAPABILITY_TTL
     claims = {"aud": audience, "session_id": session_id, "run_id": run_id, "actor": actor,
+              "hidden_documents": hidden_documents or [],
               "allowed_tools": allowed_tools, "delegation_id": delegation_id, "exp": exp, "typ": "capability"}
     return jwt.encode(claims, settings().internal_service_secret, algorithm="HS256"), exp
 

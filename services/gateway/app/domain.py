@@ -10,8 +10,6 @@ from shared.db import J, all_, one
 from .auth import Principal
 from .errors import ApiError
 
-CANDIDATE_ACTIONS = {"MESSAGE_SENT", "DOCUMENT_OPENED", "ARTIFACT_SAVED", "TASK_REVIEWED",
-                     "DELEGATION_CREATED", "APPROVAL_DECIDED"}
 
 
 def now() -> datetime:
@@ -82,12 +80,8 @@ def enqueue_job(c, sid: str, kind: str, dedupe_key: str, *, run_id: str | None =
               (sid, run_id, dedupe_key, kind, J(input_ or {})))
 
 
-def enqueue_policy_check(c, sid: str, trigger_seq: int) -> None:
-    enqueue_job(c, sid, "POLICY_CHECK", f"policy:{sid}:{trigger_seq}", input_={"trigger_action_seq": trigger_seq})
-
-
 def create_run(c, sid: str, kind: str, *, source_message_id: str | None = None, task_id: str | None = None,
-               input_: dict | None = None, prompt_version: str = "colleague-v1") -> dict:
+               input_: dict | None = None, prompt_version: str = "colleague-v2") -> dict:
     run_id = str(uuid.uuid4())
     run = one(c, """INSERT INTO runs(id,session_id,thread_id,kind,status,source_message_id,task_id,input,
                      policy_version,prompt_version,trace_id)
@@ -168,3 +162,19 @@ def to_jsonable(v: Any) -> Any:
     if isinstance(v, list):
         return [to_jsonable(x) for x in v]
     return v
+
+
+# ---- exam clock (DAYZERO_EXAM_SCENARIO §6, §10) -----------------------------------------
+
+def elapsed_min(s: dict) -> float:
+    """Elapsed exam minutes = wall time since start + demo offset (admin-only time travel)."""
+    if not s.get("started_at"):
+        return 0.0
+    offset = float((s.get("policy_state") or {}).get("time_offset_min", 0))
+    return (now() - s["started_at"]).total_seconds() / 60 + offset
+
+
+def hidden_document_ids(c, s: dict) -> list[str]:
+    em = elapsed_min(s)
+    return [d["id"] for d in all_(c, "SELECT id, available_after_min FROM documents WHERE scenario_id=%s", (s["scenario_id"],))
+            if d["available_after_min"] > em]

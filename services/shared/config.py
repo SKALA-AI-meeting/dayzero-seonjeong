@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT / "data" / "commerce-cart-v1"
+DATA_DIR = ROOT / "data" / "moarun-rejoin-v1"
 PROMPTS_DIR = ROOT / "prompts"
 
 
@@ -42,7 +42,7 @@ class Settings:
         self.rag_mode = g("RAG_MODE", "vector")
         self.embedding_model = g("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
         self.embedding_dimension = int(g("EMBEDDING_DIMENSION", "384"))
-        self.index_version = g("INDEX_VERSION", "commerce-index-v1")
+        self.index_version = g("INDEX_VERSION", "moarun-index-v1")
         self.llm_mode = g("LLM_MODE", "fixture")
         self.openai_model = g("OPENAI_MODEL", "gpt-4o-mini")
         self.jwt_secret = g("JWT_SECRET", "")
@@ -67,8 +67,9 @@ def settings() -> Settings:
     return Settings()
 
 
-SCENARIO_ID = "commerce-cart-v1"
+SCENARIO_ID = "moarun-rejoin-v1"
 SCENARIO_VERSION = 1
-POLICY_VERSION = "help-v1"
-DATASET_VERSION = "cart-data-v1"
-SECTION_IDS = ["problem", "evidence", "options", "experiment", "risks"]
+POLICY_VERSION = "exam-v1"
+DATASET_VERSION = "rejoin-data-v1"
+SECTION_IDS = ["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"]
+EXAM_MINUTES = 120

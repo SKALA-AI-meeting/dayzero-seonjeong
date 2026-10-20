@@ -54,7 +54,6 @@ class WorkState(TypedDict, total=False):
     llm_messages: list[dict]
     answer: str
     limited: str | None
-    delegation_proposal: dict | None
     decision: str | None
     token_usage: dict
 
@@ -89,100 +88,112 @@ def load_context(state: WorkState) -> dict:
                            "token_usage": state.get("token_usage", {"input": 0, "output": 0})}
     if ctx["delegation"]:
         out["delegation_id"] = str(ctx["delegation"]["id"])
-        out["request"] = ctx["task"]["title"]
+        out["request"] = ctx["task"]["title"] + (f" (수정 요청: {run['input']['revise_comment']})" if run["input"].get("revise_comment") else "")
     return out
 
 
-DELEGATE_RE = re.compile(r"(위임|맡겨|맡길|대신\s*정리|정리해\s*줄|정리해\s*주|정리\s*부탁)")
-ANSWER_RE = re.compile(r"(정답|답\s*알려|뭐가\s*문제|우선순위\s*(정해|골라)|최종안\s*(써|작성)|대신\s*(써|작성|결정))")
-READ_RE = re.compile(r"(조사|조회|확인|찾아|알려|보여|수치|지표|이탈|비율|문의|고객|문서|정책|릴리즈|변경|배송|가입|쿠폰|주소|모바일|데스크톱|신규|재방문|금액)")
+ANSWER_RE = re.compile(r"(정답|답\s*알려|대신\s*(써|작성|결정|정해)|최종안\s*(써|작성))")
+RECHECK_RE = re.compile(r"(유료|멤버십|결제|정책|재검토|다시\s*확인|확인해\s*(주|보)|맞나요|충돌|안\s*될|불가)")
+READ_RE = re.compile(r"(조사|조회|찾아|알려|보여|수치|지표|재참여|비율|인터뷰|문서|정책|회의록|사례|규모|사용자|자료)")
 
 
 @_timed
 def classify_request(state: WorkState) -> dict:
-    """Code decides scope/help; only the request type is classified (rules; LLM not needed for this split)."""
+    """Code decides scope/help; only the request type is classified."""
     if state["kind"] == "DELEGATED":
         return {"intent": "delegated"}
     text = state["request"]
+    scen = state["facts"]["ctx"].get("scenario_state") or {}
+    if state["kind"] == "COLLEAGUE" and scen.get("error_open") and RECHECK_RE.search(text):
+        return {"intent": "policy_recheck"}
     if ANSWER_RE.search(text):
         return {"intent": "answer_request"}
-    if state["kind"] == "COLLEAGUE" and DELEGATE_RE.search(text):
-        return {"intent": "delegate_proposal"}
     if READ_RE.search(text):
         return {"intent": "investigate"}
-    return {"intent": "question"}
+    return {"intent": "conversation"}
 
 
 @_timed
 def select_help(state: WorkState) -> dict:
-    return {"help_id": {"delegated": "H3", "investigate": "H2", "delegate_proposal": "H1",
-                        "answer_request": "H1", "question": "H1"}[state["intent"]]}
+    return {"help_id": {"delegated": "H3", "investigate": "H2", "policy_recheck": "H2",
+                        "answer_request": "H1", "conversation": "H1"}[state["intent"]]}
 
 
 # ---- fixture planner (deterministic, LLM_MODE=fixture) ------------------------------------
 
-TAG_WORDS = {"배송": "shipping", "무료배송": "shipping", "가입": "signup", "회원": "signup", "쿠폰": "coupon",
-             "주소": "performance", "느": "performance", "성능": "performance", "비교": "comparison"}
+TAG_WORDS = {"어색": "awkward", "아는 사람": "awkward", "일정": "missed_schedule", "알림": "missed_schedule",
+             "놓": "missed_schedule", "페이스": "pace", "위치": "location", "리더": "host"}
+SECTION_QUERY = {"similar_cases": "비슷한 서비스 사례 같이달려 한바퀴", "metrics_timeline": "재참여율 지표 출시 일정 개발 리드",
+                 "features": "재참여 기능 아이디어", "problem": "재참여율 문제", "interview_evidence": "사용자 인터뷰 의견"}
 
 
-def fixture_plan(text: str, filters: dict | None = None) -> list[dict]:
-    f: dict[str, str] = dict(filters or {})
-    if "모바일" in text: f.setdefault("device", "mobile")
-    if "데스크톱" in text or "PC" in text: f.setdefault("device", "desktop")
-    if "신규" in text: f.setdefault("visitor", "new")
-    if "재방문" in text: f.setdefault("visitor", "returning")
-    period = "baseline" if ("baseline" in text or "이전" in text) and "current" not in text else "current"
-    if "visitor" not in f:
-        dim = "visitor"
-    elif "device" not in f:
-        dim = "device"
-    else:
-        dim = "cart_value"
-    plan = [{"tool": "get_funnel_metrics", "args": {"period": "baseline", "dimension": dim, "filters": f}},
-            {"tool": "get_funnel_metrics", "args": {"period": period if period == "current" else "current", "dimension": dim, "filters": f}}]
+METRIC_RE = re.compile(r"(지표|재참여|수치|비율|규모|%|몇\s*명)")
+
+
+def fixture_plan(text: str, section: str | None = None, released: bool = False) -> list[dict]:
+    plan = []
+    if section == "metrics_timeline" or (section is None and METRIC_RE.search(text)):
+        plan.append({"tool": "get_rejoin_metrics", "args": {"dimension": "group_size"}})
     tags = sorted({v for k, v in TAG_WORDS.items() if k in text})[:3]
-    if tags or "고객" in text or "문의" in text:
-        plan.append({"tool": "get_support_cases", "args": {"tags": tags, "limit": 5}})
-    plan.append({"tool": "search_docs", "args": {"query": text[:200], "top_k": 3}})
+    if released and (tags or "인터뷰" in text or section in ("interview_evidence", "features")):
+        plan.append({"tool": "get_interview_notes", "args": {"tags": tags, "limit": 8}})
+    plan.append({"tool": "search_docs", "args": {"query": (SECTION_QUERY.get(section or "") or text)[:200], "top_k": 3}})
     return plan
 
 
 def pct(v: float | None) -> str:
-    return "—" if v is None else f"{v * 100:.1f}%"
+    return "—" if v is None else f"{round(v * 100, 1):g}%"
+
+
+def _metrics(state: WorkState) -> list[dict]:
+    for r in state.get("tool_results", []):
+        if r["tool"] == "get_rejoin_metrics" and r["payload"]["ok"]:
+            return r["payload"]["data"]["rows"]
+    return []
 
 
 def fixture_answer(state: WorkState) -> str:
     lines: list[str] = []
-    metrics = [r for r in state["tool_results"] if r["tool"] == "get_funnel_metrics" and r["payload"]["ok"]]
-    by_period = {m["args"]["period"]: m["payload"]["data"] for m in metrics}
-    if "current" in by_period:
-        cur, base = by_period["current"], by_period.get("baseline")
-        fl = cur["filters"]
-        scope = ", ".join(f"{k}={v}" for k, v in fl.items()) or "전체"
-        lines.append(f"[지표 조회] current 기간 · 범위 {scope} · {cur['dimension']}별 (cart-data-v1)")
-        base_rows = {r["segment"]: r for r in (base["rows"] if base else [])}
-        for r in cur["rows"]:
-            b = base_rows.get(r["segment"])
-            diff = ""
-            if b and b["abandonment_rate"] is not None and r["abandonment_rate"] is not None:
-                diff = f" (baseline {pct(b['abandonment_rate'])}, {round((r['abandonment_rate'] - b['abandonment_rate']) * 100, 1)}pp)"
-            lines.append(f"- {r['segment']}: 장바구니 {r['cart_sessions']}세션 → 결제 {r['checkout_sessions']} → 주문 {r['orders']}, "
-                         f"장바구니 이탈률 {pct(r['abandonment_rate'])}{diff}, 결제 진입 후 이탈률 {pct(r['checkout_abandonment_rate'])}")
-    cases = [r for r in state["tool_results"] if r["tool"] == "get_support_cases" and r["payload"]["ok"]]
-    if cases:
-        items = cases[0]["payload"]["data"]["items"]
-        lines.append("[고객 문의] " + " / ".join(f"{i['id']} “{i['quote']}”" for i in items[:3]))
-        lines.append("  ※ 과제용 선택 사례라 전체 원인 비중은 알 수 없습니다.")
-    docs = [r for r in state["tool_results"] if r["tool"] == "search_docs" and r["payload"]["ok"]]
+    rows = _metrics(state)
+    if rows:
+        lines.append("지표 현황 기준으로 첫 모임 규모별 30일 재참여율을 확인했어요.")
+        for r in rows:
+            lines.append(f"- {r['label']}: {r['first_time_participants']}명 중 {r['rejoined_within_30d']}명, {pct(r['rejoin_rate'])}")
+        lines.append("규모가 클수록 낮게 나오지만, 이 수치만으로 규모가 원인이라고 단정하긴 어려워요.")
+    notes = [r for r in state.get("tool_results", []) if r["tool"] == "get_interview_notes" and r["payload"]["ok"]]
+    if notes:
+        items = notes[0]["payload"]["data"]["items"]
+        lines.append("인터뷰에서는 " + " / ".join(f"{i['id']} “{i['quote']}”" for i in items[:3]))
+        lines.append("(8명 인터뷰라 전체 비중으로 일반화하긴 어려워요.)")
+    docs = [r for r in state.get("tool_results", []) if r["tool"] == "search_docs" and r["payload"]["ok"]]
     if docs and docs[0]["payload"]["data"]["matches"]:
-        m = docs[0]["payload"]["data"]["matches"][0]
-        lines.append(f"[관련 문서] {m['title']}: “{m['quote'][:80]}”")
-    errors = [r for r in state["tool_results"] if not r["payload"]["ok"]]
-    for e in errors:
-        lines.append(f"- {e['tool']} 조회 실패({e['payload']['error']['code']}): 이 부분은 확인하지 못했습니다.")
-    lines.append("관찰 집계라 특정 변경의 인과 효과는 확정할 수 없습니다.")
-    lines.append("다음으로 어떤 범위(기기·방문 유형·금액·문의 태그)를 더 볼지 정해 주시겠어요?")
+        for m in docs[0]["payload"]["data"]["matches"][:2]:
+            lines.append(f"관련 문서({m['title']}): “{m['quote'][:120]}”")
+    for e in [r for r in state.get("tool_results", []) if not r["payload"]["ok"]]:
+        lines.append(f"- {e['tool']}는 확인하지 못했어요({e['payload']['error']['code']}).")
+    if state.get("kind") != "ASSISTANT":
+        lines.append("어떤 방향으로 볼지는 정해 주시면 거기에 맞춰 더 찾아볼게요.")
     return "\n".join(lines)
+
+
+def section_draft(state: WorkState, section: str) -> str:
+    rows = {r["segment"]: r for r in _metrics(state)}
+    if section == "similar_cases":
+        return ("[이도현 초안 · 유사 서비스 사례]\n"
+                "- '같이달려'(가상, 동네 운동 모임 앱): 첫 참가자에게 짝꿍을 매칭해 어색함을 줄이는 방식 (지난주 회의록)\n"
+                "- '한바퀴'(가상, 걷기 모임 앱): 모임이 끝나면 다음 모임 일정을 자동으로 안내하는 방식 (지난주 회의록)\n"
+                "- 비교 기준(안): 첫 참가자 적응 지원 여부, 다음 일정 안내 방식, 운영 부담\n"
+                "- 한계: 두 사례의 효과 수치는 확인되지 않음 (지난주 회의록)")
+    if section == "metrics_timeline":
+        cur = "22%"
+        lines = ["[이도현 초안 · 성공 지표와 출시 일정]",
+                 f"- 핵심 지표: 첫 모임 참가자의 30일 내 재참여율(현재 {cur}, 분모: 첫 모임 참가자) (지표 현황)"]
+        if rows:
+            lines.append("- 보조 지표: 첫 모임 규모별 재참여율 — " + ", ".join(f"{r['label']} {pct(r['rejoin_rate'])}" for r in rows.values()))
+        lines += ["- 목표치는 기능 범위가 정해진 뒤 함께 정하는 것이 좋겠습니다(근거 없는 목표치를 넣지 않음).",
+                  "- 출시 일정(안): 설계 → 개발 → 베타 순으로 진행하고, 구체 일정은 개발 리드와 확정 (지난주 회의록)"]
+        return "\n".join(lines)
+    return "[이도현 초안]\n" + fixture_answer(state)
 
 
 # ---- live LLM ----------------------------------------------------------------------------
@@ -214,18 +225,23 @@ def _tool_specs(tools: list) -> list[dict]:
 def reason(state: WorkState) -> dict:
     """Decide next tool call(s) or final answer, inside loop limits."""
     intent = state["intent"]
-    if intent in ("answer_request", "question", "delegate_proposal"):
-        return {"plan": []}
+    scen = state["facts"]["ctx"].get("scenario_state") or {}
     if S.llm_mode != "live":
+        if intent in ("answer_request", "conversation"):
+            return {"plan": []}
         if not state.get("tool_results"):
-            filters = (state["facts"]["ctx"].get("delegation") or {}).get("constraints", {}).get("filters")
-            return {"plan": fixture_plan(state["request"], filters)}
+            if intent == "policy_recheck":
+                return {"plan": [{"tool": "search_docs", "args": {"query": "올해 유료 기능 출시 정책", "document_ids": ["operating-policy"], "top_k": 1}}]}
+            sec = (state["facts"]["ctx"].get("task") or {}).get("template_key") if intent == "delegated" else None
+            return {"plan": fixture_plan(state["request"], sec, released=scen.get("interviews_released", False))}
         return {}
+    if intent == "answer_request" and not state.get("llm_messages"):
+        return {"plan": []}
     # live: real gpt-4o-mini tool selection
     msgs = state.get("llm_messages") or []
     if not msgs:
         ctx = state["facts"]["ctx"]
-        name = "assistant-v1" if state["kind"] == "ASSISTANT" else "colleague-v1"
+        name = "assistant-v2" if state["kind"] == "ASSISTANT" else "colleague-v2"
         system, _ = H.load_prompt(name)
         pack = H.build_context(system, ctx["public_brief"]["public_brief"], ctx["messages"], [],
                                ctx.get("delegation"), H.rule_summary)
@@ -235,7 +251,12 @@ def reason(state: WorkState) -> dict:
             msgs.append({"role": "user" if m["actor"] == "CANDIDATE" else "assistant",
                          "content": H.mask_pii(f"[{m['actor']}] {m['content']}")})
         if state["kind"] == "DELEGATED":
-            msgs.append({"role": "user", "content": f"[위임 작업] {state['request']}. 위임 범위의 사실과 출처만 조사해 evidence 섹션용 요약을 작성하라."})
+            sec = state["facts"]["ctx"]["task"]["template_key"]
+            msgs.append({"role": "user", "content": f"[분담 작업] 네가 맡은 '{state['request']}'({sec}) 섹션 초안을 회사 문서 근거로 작성하라. "
+                                                    "문서에 없는 수치나 회사 정보는 쓰지 말고, 참조 문서명을 괄호로 적어라."})
+        elif state["intent"] == "policy_recheck":
+            msgs.append({"role": "user", "content": "[지시] 지원자가 네 제안의 재검토를 요청했다. operating-policy 문서를 search_docs로 다시 확인하고, "
+                                                    "정책과 충돌하면 인정하고 정정 의견을 말하라."})
     tools = _tool_specs(list_read_tools(gw, state["run_id"]))
     deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
     model = llm().bind_tools(tools)
@@ -269,7 +290,7 @@ def call_mcp(state: WorkState) -> dict:
             payload = {"ok": False, "data": None, "error": {"code": "RATE_LIMITED", "message": f"도구 한도 초과({e.reason})", "retryable": False}, "citations": []}
             msgs.append({"role": "tool", "tool_call_id": tcid, "content": H.tool_message_content(payload)})
             continue
-        if tool not in {"get_funnel_metrics", "get_support_cases", "search_docs"}:
+        if tool not in {"get_rejoin_metrics", "get_interview_notes", "search_docs"}:
             payload = {"ok": False, "data": None, "error": {"code": "FORBIDDEN", "message": f"허용되지 않은 도구: {tool}", "retryable": False}, "citations": []}
         else:
             gw.event(state["run_id"], "TOOL_START", {"tool_call_id": tcid, "tool_name": tool}, key=f"start:{tcid}")
@@ -305,20 +326,20 @@ def after_call(state: WorkState) -> str:
 def validate_output(state: WorkState) -> dict:
     intent = state["intent"]
     if intent == "answer_request":
-        return {"answer": "정답을 정해 드리기보다 함께 근거를 보는 편이 좋겠습니다. 먼저 어떤 자료 범위를 확인할지 정해 주시겠어요? "
-                          "예: current 기간 기기별 지표, 신규/재방문 비교, 배송·가입 관련 고객 문의."}
-    if intent == "question":
-        return {"answer": "어떤 부분을 도와드릴까요? 조사할 범위(기간·기기·방문 유형·장바구니 금액·문의 태그·문서)를 정해 주시면 "
-                          "그 범위의 사실을 출처와 함께 정리하겠습니다."}
-    if intent == "delegate_proposal":
-        f = {k: v for k, v in fixture_plan(state["request"])[0]["args"]["filters"].items()}
-        scope = ", ".join(f"{k}={v}" for k, v in f.items()) or "전체"
-        title = f"evidence 조사: {scope} 세그먼트 지표와 관련 문의·문서"
-        return {"answer": f"위임 범위를 제안드립니다. 확인 버튼을 누르시면 제가 '{title}'를 조사해 evidence 섹션 초안을 만들고, "
-                          f"문서에 반영하기 전에 승인을 요청하겠습니다. 범위를 바꾸고 싶으시면 말씀해 주세요.",
-                "delegation_proposal": {"title": title[:150], "target_section": "evidence",
-                                        "allowed_tools": ["get_funnel_metrics", "get_support_cases", "search_docs"], "filters": f}}
-    text = state.get("answer") or "" if S.llm_mode == "live" else fixture_answer(state)
+        return {"answer": "제가 정답을 정하기보다는 같이 근거를 보고 정하시는 게 좋을 것 같아요. 어떤 자료부터 볼까요? "
+                          "지표 현황, 운영 정책, 회의록 중에 골라 주시면 정리해 드릴게요."}
+    if intent == "policy_recheck" and S.llm_mode != "live":
+        quote = ""
+        for r in state.get("tool_results", []):
+            if r["tool"] == "search_docs" and r["payload"]["ok"] and r["payload"]["data"]["matches"]:
+                quote = r["payload"]["data"]["matches"][0]["quote"]
+        text = ("말씀 듣고 운영 정책 문서를 다시 확인했어요." + (f" “{quote[:80]}”라고 되어 있네요." if quote else "") +
+                " 제가 제안한 유료 멤버십은 올해 정책과 맞지 않아서 철회할게요. 짚어 주셔서 감사합니다. "
+                "대신 결제 없이 재참여를 돕는 방향으로 같이 다시 생각해 보면 좋겠어요.")
+        return {"answer": text, "facts": {**state["facts"], "corrected": True}}
+    if intent == "conversation" and S.llm_mode != "live":
+        return {"answer": "말씀 감사해요. 그 방향으로 생각해 볼게요. 필요하신 자료가 있으면 편하게 말씀해 주세요."}
+    text = (state.get("answer") or "") if S.llm_mode == "live" else fixture_answer(state)
     if not text.strip():
         text = fixture_answer(state)
     allowed = _allowed_numbers(state)
@@ -329,19 +350,22 @@ def validate_output(state: WorkState) -> dict:
             text = fixture_answer(state)  # one deterministic rewrite from tool results only
             problems = H.validate_output(text, allowed)
         if problems:
-            text = H.SAFE_FALLBACK
-            return {"answer": text, "output_rewrite_count": rewrites + 1, "error_code": "OUTPUT_VALIDATION"}
+            return {"answer": H.SAFE_FALLBACK, "output_rewrite_count": rewrites + 1, "error_code": "OUTPUT_VALIDATION"}
     if state.get("limited"):
-        text += f"\n(도구 사용 한도 {state['limited']}에 도달해 여기까지만 조사했습니다.)"
-    return {"answer": text, "output_rewrite_count": rewrites + (1 if problems else 0)}
+        text += f"\n(도구 사용 한도 {state['limited']}에 도달해 여기까지만 확인했어요.)"
+    out = {"answer": text, "output_rewrite_count": rewrites + (1 if problems else 0)}
+    if intent == "policy_recheck":
+        out["facts"] = {**state["facts"], "corrected": True}
+    return out
 
 
 def _allowed_numbers(state: WorkState) -> set[str]:
     """Numbers present in tool results/request, plus pp differences derived from returned rates."""
     allowed = set().union(*[H.numbers_in(r["payload"]) for r in state.get("tool_results", [])] or [set()])
     allowed |= H.numbers_in(state.get("request", ""))
-    rates = [row[k] for r in state.get("tool_results", []) if r["tool"] == "get_funnel_metrics" and r["payload"]["ok"]
-             for row in r["payload"]["data"]["rows"] for k in ("abandonment_rate", "checkout_abandonment_rate") if row[k] is not None]
+    rates = [row["rejoin_rate"] for r in state.get("tool_results", []) if r["tool"] == "get_rejoin_metrics" and r["payload"]["ok"]
+             for row in r["payload"]["data"]["rows"] if row["rejoin_rate"] is not None]
+    allowed |= {"30000", "4000", "880"}  # 지표 현황 문서의 공개 수치
     for x in rates:
         for y in rates:
             allowed.add(f"{abs(round((x - y) * 100, 1))}")
@@ -352,8 +376,8 @@ def _allowed_numbers(state: WorkState) -> set[str]:
 def respond(state: WorkState) -> dict:
     etype = "ASSISTANT_MESSAGE" if state["kind"] == "ASSISTANT" else "COLLEAGUE_MESSAGE"
     payload: dict[str, Any] = {"content": state["answer"], "citations": _dedupe(state.get("citations", []))[:8]}
-    if state.get("delegation_proposal"):
-        payload["delegation_proposal"] = state["delegation_proposal"]
+    if state.get("facts", {}).get("corrected"):
+        payload["kind"] = "ERROR_CORRECTED"
     if state.get("limited"):
         payload["limited"] = True
     gw.event(state["run_id"], etype, payload, key="respond")
@@ -374,16 +398,16 @@ def _dedupe(cits: list[dict]) -> list[dict]:
 
 @_timed
 def draft_delegation(state: WorkState) -> dict:
-    summary = fixture_answer(state) if S.llm_mode != "live" or not state.get("answer") else state["answer"]
-    if H.validate_output(summary, _allowed_numbers(state)):
-        summary = fixture_answer(state)
-    summary = summary.replace("다음으로 어떤 범위(기기·방문 유형·금액·문의 태그)를 더 볼지 정해 주시겠어요?", "").strip()
     ctx = state["facts"]["ctx"]
+    section = ctx["task"]["template_key"]
+    summary = state.get("answer") if S.llm_mode == "live" and state.get("answer") else section_draft(state, section)
+    if H.validate_output(summary, _allowed_numbers(state)):
+        summary = section_draft(state, section)
     art = ctx["artifact"]
-    current = art["sections"].get("evidence", "")
-    content = (current + "\n\n" if current.strip() else "") + f"[동료 조사 · 위임: {ctx['task']['title']}]\n{summary}"
-    cits = [c for c in _dedupe(state.get("citations", [])) if c.get("document_id") not in ("funnel_facts", "support_cases")][:5]
-    args = {"task_id": state["task_id"], "section": "evidence", "base_version": art["version"], "content": content,
+    current = art["sections"].get(section, "")
+    content = (current + "\n\n" if current.strip() else "") + summary
+    cits = [c for c in _dedupe(state.get("citations", [])) if c.get("document_id") not in ("rejoin_facts", "interview_notes")][:5]
+    args = {"task_id": state["task_id"], "section": section, "base_version": art["version"], "content": content,
             "citations": [{"document_id": c["document_id"], "chunk_id": c.get("chunk_id"), "version": c.get("version", 1),
                            "quote": c["quote"]} for c in cits]}
     gw.event(state["run_id"], "TASK_RESULT", {"result": {"summary": summary, "citations": cits}}, key="task-result")
@@ -395,7 +419,7 @@ def draft_delegation(state: WorkState) -> dict:
 def persist_proposal(state: WorkState) -> dict:
     """Idempotent approval creation BEFORE interrupt (same interrupt_id on replay)."""
     pa = state["proposed_action"]
-    r = gw.post(f"/runs/{state['run_id']}/proposal", {"interrupt_id": "evidence-patch-1", "tool_name": pa["tool_name"],
+    r = gw.post(f"/runs/{state['run_id']}/proposal", {"interrupt_id": "section-patch-1", "tool_name": pa["tool_name"],
                                                       "args": pa["args"], "base_versions": pa["base_versions"],
                                                       "delegation_id": state.get("delegation_id")})
     return {"approval_id": r["approval_id"]}
@@ -415,12 +439,12 @@ def after_approval(state: WorkState) -> str:
 def execute_write(state: WorkState) -> dict:
     pa = state["proposed_action"]
     payload, ms = call_tool(gw, state["run_id"], pa["tool_name"], pa["args"], approval_id=state["approval_id"])
-    gw.event(state["run_id"], "TOOL_END", {"tool_name": pa["tool_name"], "safe_args": {"section": "evidence", "task_id": state["task_id"]},
+    gw.event(state["run_id"], "TOOL_END", {"tool_name": pa["tool_name"], "safe_args": {"section": pa["args"]["section"], "task_id": state["task_id"]},
                                            "outcome": "ok" if payload["ok"] else payload["error"]["code"],
                                            "result_summary": payload.get("data") or {}, "citations": [], "help_id": "H3",
                                            "duration_ms": ms}, key=f"write:{state['approval_id']}")
     if payload["ok"]:
-        text = "승인해 주신 범위대로 evidence 섹션에 조사 요약을 반영했습니다. 그대로 쓸지, 수정·기각할지는 태스크 보드에서 결정해 주세요."
+        text = "확인해 주셔서 감사해요. 제 담당 섹션에 초안을 반영했어요. 그대로 쓸지, 수정 요청할지는 태스크 보드에서 정해 주세요."
     else:
         code = payload["error"]["code"]
         text = ("승인 대기 중 기획안이 바뀌어 반영하지 않았습니다(APPROVAL_STALE). 필요하면 수정 요청으로 다시 조사하겠습니다."
@@ -430,7 +454,7 @@ def execute_write(state: WorkState) -> dict:
 
 @_timed
 def record_rejection(state: WorkState) -> dict:
-    return {"answer": "거절하신 대로 기획안은 변경하지 않았습니다. 조사 요약은 태스크 카드에 남겨 두었으니 검토 후 수정 요청 또는 기각해 주세요."}
+    return {"answer": "알겠어요, 문서에는 넣지 않았어요. 초안은 태스크 카드에 남겨 둘게요. 어떤 점을 바꾸면 좋을지 말씀해 주시면 고쳐 볼게요."}
 
 
 def build(checkpointer):
