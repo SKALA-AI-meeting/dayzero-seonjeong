@@ -12,6 +12,7 @@
 dayzero-seonjeong/
   README.md              실행 방법·구성·검증 상태
   compose.yaml           (미검증) 컨테이너 실행
+  infra/                 로컬 실행 스크립트(dev-up / dev-status / dev-down)
   docs/                  명세·지침 원본(문서 안내: docs/README.md)
   data/moarun-rejoin-v1/ 시나리오 seed(회사 자료 5개, 지표, 인터뷰, 이벤트 정책, 검색 평가셋)
   prompts/               버전 관리되는 시스템 프롬프트(동료·어시스턴트·섹션 작성·요약·리포트)
@@ -31,41 +32,61 @@ dayzero-seonjeong/
 | business-mcp | 9101 `/mcp` | `business_mcp.server` — gateway 내부 API로만 전달 |
 | rag-mcp | 9102 `/mcp` | `rag_mcp.server` — pgvector 검색(읽기 전용 role) |
 | db | 5434(호스트) | `pgvector/pgvector:pg17` |
+| rabbitmq | 5672 / 15672(관리) | `rabbitmq:3.13-management` — 리포트 생성 작업 큐, 지연 재시도 3회, DLQ |
 
 확정 버전(MD 지침 대신 로컬 환경 기준): Python 3.11.9(uv), Node 26.7, Next 15.5, FastAPI 0.150, LangGraph 1.2, langgraph-checkpoint-postgres 3.2, mcp 2.3, sentence-transformers 6.1, PostgreSQL 17 + pgvector 0.8.7. 호스트 5432·5433은 이미 사용 중이라 DB 호스트 포트는 5434입니다.
 
-## 로컬 실행 (현재 검증된 방법)
+## 실행 방법
 
+### 준비물
+- Docker Desktop(실행 중), Python 3.11 + [uv](https://docs.astral.sh/uv/), Node.js(22 이상)
+- 사용 포트: 3100(web), 8000(gateway), 8001(agent), 9101/9102(MCP), 5434(PostgreSQL), 5672/15672(RabbitMQ)
+
+### 최초 1회: 환경 파일
 ```bash
-# 0) 최초 1회
-cp .env.example .env   # DSN의 @db:5432 → @localhost:5434, 내부 URL → localhost, 비밀값 직접 설정
-docker run -d --name dayzero-db -e POSTGRES_USER=dayzero -e POSTGRES_PASSWORD=local_demo_only \
-  -e POSTGRES_DB=dayzero -p 5434:5432 -v dayzero_pgdata:/var/lib/postgresql/data pgvector/pgvector:pg17
-cd services && uv sync
-uv run alembic upgrade head
-uv run python -m scripts.seed
-uv run python -m scripts.index_documents --scenario moarun-rejoin-v1   # 임베딩 모델 다운로드 + 색인
-cd ../frontend && npm ci
+cp .env.example .env
+```
+`.env`에서 다음을 로컬 값으로 바꿉니다.
+- 컨테이너 주소 `@db:5432` → `@localhost:5434`, `rabbitmq:5672` → `localhost:5672`
+- `GATEWAY_INTERNAL_URL`, `AGENT_INTERNAL_URL`, `BUSINESS_MCP_URL`, `RAG_MCP_URL` → `http://localhost:포트`
+- 비밀값 `JWT_SECRET`, `INTERNAL_SERVICE_SECRET`, `SEED_ADMIN_PASSWORD`(빈 값이면 서버가 시작을 거절함)
+- 실제 LLM: `OPENAI_API_KEY`, 관측: `LANGSMITH_API_KEY`(선택)
 
-# 1) 서비스 실행 (각각 별도 터미널, services/ 에서)
+### 한 번에 실행 / 종료 (검증된 방법)
+```bash
+./infra/dev-up.sh                  # fixture 모드(.env의 LLM_MODE)
+LLM_MODE=live ./infra/dev-up.sh    # 실제 gpt-4o-mini
+./infra/dev-status.sh              # web·gateway·agent·MCP·RabbitMQ 상태
+./infra/dev-down.sh                # 서비스 종료(DB·큐 데이터 유지)
+./infra/dev-down.sh --infra        # 컨테이너까지 정지(볼륨은 삭제하지 않음)
+```
+`dev-up.sh`가 하는 일: DB(pgvector pg17)·RabbitMQ 컨테이너 기동 → `uv sync` → 마이그레이션 → seed → (색인이 없으면) 벡터 색인 → gateway·business-mcp·rag-mcp·agent·web 백그라운드 실행 → 상태 확인. 로그는 `.run/logs/*.log`에 남습니다. 이미 떠 있는 서비스는 건너뜁니다.
+
+### 사용해 보기
+1. http://localhost:3100/admin/login: `admin@dayzero.local` / `.env`의 `SEED_ADMIN_PASSWORD`
+2. "새 초대 만들기" → 링크 복사 → **다른 브라우저 또는 시크릿 창**에서 열어 지원자로 입장
+3. 시연 시간 이동: 관리자 세션 목록의 "시연: 이벤트로 이동"(00:10 분담 ~ 02:00 자동 제출, `APP_ENV=development`에서만 표시)
+4. 제출 후 관리자 "리포트 열기", RabbitMQ 관리 화면 http://localhost:15672 (dayzero / local_demo_only)
+
+### 테스트·검증 (services/ 에서)
+```bash
+uv run pytest -q tests/test_m0_auth.py                    # 인증 6건
+uv run python -m scripts.smoke_mcp                        # MCP 22건
+uv run python -m scripts.smoke_flow --mode live           # 시나리오 전체(agent 모드와 일치시킬 것)
+PYTHONPATH=. uv run python -m scripts.smoke_queue         # RabbitMQ 처리·재시도·DLQ
+uv run python -m scripts.eval_harness --suite harness-v1 --label baseline   # Harness 8요소
+uv run python -m scripts.restart_resume prepare && ./../infra/dev-down.sh && ./../infra/dev-up.sh && uv run python -m scripts.restart_resume decide  # AT-08
+```
+
+### 수동 실행(서비스별로 직접 띄울 때)
+```bash
+cd services
 uv run uvicorn gateway.app.main:app --host 127.0.0.1 --port 8000
 uv run python -m business_mcp.server
 uv run python -m rag_mcp.server
-uv run uvicorn agent.app.main:app --host 127.0.0.1 --port 8001          # fixture
-LLM_MODE=live uv run uvicorn agent.app.main:app --host 127.0.0.1 --port 8001   # 실제 gpt-4o-mini
-# frontend/ 에서
-npm run dev    # http://localhost:3100
-
-# 2) 검증
-curl http://localhost:8000/api/v1/health
-uv run pytest -q tests/test_m0_auth.py
-uv run python -m scripts.smoke_mcp
-uv run python -m scripts.smoke_flow --mode fixture   # agent 모드와 일치시켜 실행
+LLM_MODE=live uv run uvicorn agent.app.main:app --host 127.0.0.1 --port 8001
+cd ../frontend && npm run dev
 ```
-
-관리자 로그인: `http://localhost:3100/admin/login`, 이메일 `admin@dayzero.local`, 비밀번호는 `.env`의 `SEED_ADMIN_PASSWORD`. 초대 링크를 만든 뒤 다른 브라우저(또는 시크릿 창)에서 열면 지원자로 입장합니다.
-
-시험은 실제 2시간 기준으로 진행되며 이벤트(00:10 업무 분담 ~ 02:00 자동 제출)는 서버 시계로 발생합니다. 시연할 때는 관리자 세션 목록의 "시연: 이벤트로 이동" 메뉴로 다음 이벤트 시각으로 건너뛸 수 있습니다(`APP_ENV=development`에서만 표시, 지원자 화면에는 노출되지 않음).
 
 Docker Compose(`compose.yaml`, `services/Dockerfile`, `frontend/Dockerfile`)는 작성했지만 컨테이너 빌드·기동은 아직 검증하지 않았습니다. 검증된 실행 방법은 위의 로컬 실행입니다.
 
@@ -84,7 +105,7 @@ docker compose up -d
 
 ## 검증 상태
 
-AT-01~AT-17 판정과 근거는 [evidence/verification.md](evidence/verification.md)에 있습니다(PASS 13 / PARTIAL 4). Harness 8요소 평가: `uv run python -m scripts.eval_harness --suite harness-v1 --label <label>` → `evals/results/`.
+AT-01~AT-17 판정과 근거는 [evidence/verification.md](evidence/verification.md)에 있습니다(PASS 13 / PARTIAL 4, 대기열 가산점 검증 포함). Harness 8요소 평가: `uv run python -m scripts.eval_harness --suite harness-v1 --label <label>` → `evals/results/`.
 
 ## 근거와 구현 가정
 

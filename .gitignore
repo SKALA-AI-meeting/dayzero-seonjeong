@@ -7,3 +7,4 @@ frontend/.next/
 evidence/*.local.*
 *.pyc
 .DS_Store
+.run/

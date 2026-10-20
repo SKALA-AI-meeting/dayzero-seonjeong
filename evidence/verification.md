@@ -36,6 +36,13 @@
 | AT-16 | PASS | `evidence/smoke_mcp.md` | 384차원·모델 revision·index_version 저장, 검색 평가 5/5 top-3, Resource 원문 일치, 인터뷰 공개 전 검색 제외 |
 | AT-17 | PASS | `evals/results/harness-v1-baseline.json` 8/8 | 8요소 고정 평가셋 PASS, LangSmith root trace 20건 중 20건이 run_id metadata로 매칭, run별 trace_id·token_usage 저장 |
 
+## 가산점: 대기열 (RabbitMQ)
+
+| 항목 | 판정 | 근거 |
+|---|---|---|
+| 작업을 큐에 넣어 처리 | PASS | 제출 트랜잭션의 DB jobs(아웃박스) → agent 릴레이 → `dayzero.report` → 컨슈머 → 리포트 READY (`evidence/smoke_queue.md`) |
+| 실패 작업 재시도 | PASS | 처리 불가 작업 주입 → 3초 지연 재시도 2회 → x-attempt=3으로 `dayzero.report.dlq` 이동, 리포트 FAILED 표시, 관리자 재생성 시 재처리 READY |
+
 ## 스모크·평가 명령 (services/ 에서)
 
 ```bash
@@ -45,6 +52,7 @@ uv run python -m scripts.smoke_flow --mode live          # agent가 LLM_MODE=liv
 uv run python -m scripts.eval_harness --suite harness-v1 --label baseline
 PYTHONPATH=. uv run python -m scripts.smoke_card_revise
 PYTHONPATH=. uv run python -m scripts.smoke_task
+PYTHONPATH=. uv run python -m scripts.smoke_queue
 uv run python -m scripts.restart_resume prepare   # → agent 재시작 → decide
 ```
 
@@ -53,4 +61,4 @@ uv run python -m scripts.restart_resume prepare   # → agent 재시작 → deci
 - 리포트 LLM 해석은 live 모드에서만 생성되며(fixture는 RULES_FALLBACK), 해석은 'AI 추정'으로 사실과 분리 표시된다.
 - live 동료 초안의 출처 표기가 가끔 부정확하다. 지원자가 확인 카드에서 검토한다.
 - Docker Compose(`compose.yaml`)는 작성했지만 컨테이너 빌드·기동은 실행하지 않았다(NOT_RUN). 검증은 로컬 프로세스 기준이다.
-- 대기열(RabbitMQ) 가산점, 다중 시나리오 등 P1 항목은 하지 않았다.
+- 다중 시나리오 등 그 밖의 P1 항목은 하지 않았다(docs/ROADMAP_MULTI_COMPANY.md).
