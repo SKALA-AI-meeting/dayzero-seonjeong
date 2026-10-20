@@ -147,7 +147,8 @@ def review_task(sid: str, tid: str, body: ReviewIn, p: Principal = Depends(candi
 
 
 class DecisionIn(Strict):
-    decision: Literal["APPROVE", "REJECT"]
+    decision: Literal["APPROVE", "REJECT", "REVISE"]
+    comment: str = Field(default="", max_length=2000)
 
 
 @router.post("/sessions/{sid}/approvals/{aid}/decision", status_code=202)
@@ -157,6 +158,8 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
         a = one(c, "SELECT * FROM approvals WHERE id=%s AND session_id=%s FOR UPDATE", (aid, sid))
         if not a:
             raise ApiError(404, "NOT_FOUND", "승인 요청을 찾을 수 없습니다")
+        if body.decision == "REVISE" and not body.comment.strip():
+            raise ApiError(422, "VALIDATION_ERROR", "재수정 요청에는 검토 사항을 적어 주세요")
         want = "APPROVED" if body.decision == "APPROVE" else "REJECTED"
         run = one(c, "SELECT * FROM runs WHERE id=%s", (a["run_id"],))
         if a["status"] != "PENDING":
@@ -179,11 +182,17 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
                 want = "REJECTED_STALE"
         c.execute("UPDATE approvals SET status=%s, decided_at=now(), decision_actor_id=%s WHERE id=%s",
                   ("APPROVED" if want == "APPROVED" else ("REJECTED" if want == "REJECTED" else "EXPIRED"), p.sub, aid))
-        resume = "APPROVE" if want == "APPROVED" else "REJECT"
+        resume = "APPROVE" if want == "APPROVED" else ("REVISE" if body.decision == "REVISE" else "REJECT")
         c.execute("UPDATE runs SET status='QUEUED', updated_at=now() WHERE id=%s", (run["id"],))
         c.execute("UPDATE jobs SET status='QUEUED', available_at=now(), lease_until=NULL, input=input || %s WHERE run_id=%s",
                   (J({"resume": resume, "approval_id": aid}), run["id"]))
-        record_action(c, sid, "CANDIDATE", "APPROVAL_DECIDED", aid, {"decision": body.decision, "stale": want == "REJECTED_STALE"})
+        record_action(c, sid, "CANDIDATE", "APPROVAL_DECIDED", aid, {"decision": body.decision, "stale": want == "REJECTED_STALE",
+                                                                    "comment": body.comment})
+        if body.decision == "REVISE" and want != "REJECTED_STALE" and a["args"].get("task_id"):
+            # 현재 초안은 반영하지 않고, 검토 사항을 반영한 재작성 run을 이어서 생성(같은 세션 job 순서대로 실행)
+            create_run(c, sid, "DELEGATED", task_id=str(a["args"]["task_id"]), source_message_id=None, prompt_version="colleague-v2",
+                       input_={"revise_comment": body.comment, "section": a["args"].get("section"), "mode": "rewrite",
+                               "delegation_id": str(a["delegation_id"]) if a["delegation_id"] else None, "revise_of_approval": aid})
         emit(c, sid, "APPROVAL_DECIDED", {"approval_id": aid, "decision": body.decision, "stale": want == "REJECTED_STALE"},
              run_id=str(run["id"]))
     if want == "REJECTED_STALE":

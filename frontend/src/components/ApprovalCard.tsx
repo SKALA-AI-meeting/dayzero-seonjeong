@@ -4,8 +4,9 @@ import { Icon } from "@/components/Icon";
 import { COPY, fmtTime, SECTIONS, type Approval } from "@/lib/types";
 
 /** 승인 카드 (DESIGN_GUIDE §4.6): 대상·제안자·이전/이후·범위·만료, 승인만 주요 행동. */
-export function ApprovalCard({ a, busy, onDecide }: { a: Approval; busy: boolean; onDecide: (d: "APPROVE" | "REJECT") => void }) {
+export function ApprovalCard({ a, busy, onDecide }: { a: Approval; busy: boolean; onDecide: (d: "APPROVE" | "REJECT" | "REVISE", comment?: string) => void }) {
   const [full, setFull] = useState(false);
+  const [note, setNote] = useState("");
   const isDoc = a.tool_name === "patch_artifact_section";
   const section = SECTIONS.find((x) => x.id === a.before_after.section);
   return (
@@ -26,9 +27,16 @@ export function ApprovalCard({ a, busy, onDecide }: { a: Approval; busy: boolean
         <div><span className="small strong">변경 전</span><pre className={full ? "expanded" : ""}>{a.before_after.before || "(비어 있음)"}</pre></div>
         <div><span className="small strong">변경 후 · 추가됨</span><pre className={full ? "expanded" : ""}>{a.before_after.after}</pre></div>
       </div>
+      <div className="field">
+        <label htmlFor={`ap-note-${a.id}`} className="small">검토 사항</label>
+        <textarea id={`ap-note-${a.id}`} className="textarea" style={{ minHeight: 64 }} maxLength={2000} value={note}
+          onChange={(e) => setNote(e.target.value)} placeholder="고칠 점을 적고 재수정 요청을 누르면 이 초안은 반영하지 않고 다시 작성합니다" />
+      </div>
       <div className="row">
         <button className="btn btn-primary" disabled={busy} onClick={() => onDecide("APPROVE")}>승인하고 반영</button>
-        <button className="btn" disabled={busy} onClick={() => onDecide("REJECT")}>거절</button>
+        <button className="btn" disabled={busy || !note.trim()} onClick={() => onDecide("REVISE", note.trim())}
+          title={!note.trim() ? "검토 사항을 먼저 적어 주세요" : undefined}>재수정 요청</button>
+        <button className="btn btn-tertiary" disabled={busy} onClick={() => onDecide("REJECT")}>거절</button>
         <span className="spacer" />
         <button className="btn btn-tertiary btn-sm" onClick={() => setFull((v) => !v)} aria-expanded={full}>{full ? "접기" : "전체 보기"}</button>
       </div>

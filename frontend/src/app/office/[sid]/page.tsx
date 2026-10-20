@@ -124,9 +124,9 @@ export default function Office() {
     try { await api(`/sessions/${sid}/split`, { method: "POST", json: { decision, assignments, comment: "" } }); scheduleRefresh(); }
     catch (e) { setToast(errText(e, "업무 분담을 저장하지 못했습니다")); }
   }
-  async function decide(aid: string, decision: "APPROVE" | "REJECT") {
+  async function decide(aid: string, decision: "APPROVE" | "REJECT" | "REVISE", comment = "") {
     setBusyApproval(true);
-    try { await api(`/sessions/${sid}/approvals/${aid}/decision`, { method: "POST", json: { decision } }); }
+    try { await api(`/sessions/${sid}/approvals/${aid}/decision`, { method: "POST", json: { decision, comment } }); }
     catch (e) { setToast(errText(e, "결정을 저장하지 못했습니다")); }
     finally { setBusyApproval(false); scheduleRefresh(); }
   }
@@ -293,7 +293,7 @@ export default function Office() {
             <div id="panel-doc" role="tabpanel" aria-labelledby="tab-doc" hidden={workTab !== "doc"}>
               {snap.approvals.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
-                  {snap.approvals.map((a) => <ApprovalCard key={a.id} a={a} busy={busyApproval} onDecide={(d) => decide(a.id, d)} />)}
+                  {snap.approvals.map((a) => <ApprovalCard key={a.id} a={a} busy={busyApproval} onDecide={(d, note) => decide(a.id, d, note)} />)}
                 </div>
               )}
               {submitted && <div className="alert success" style={{ marginBottom: 16 }}><Icon name="check" />{COPY.submitted}. 읽기 전용입니다.</div>}

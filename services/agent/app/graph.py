@@ -632,6 +632,8 @@ def execute_write(state: WorkState) -> dict:
 
 @_timed
 def record_rejection(state: WorkState) -> dict:
+    if state.get("decision") == "REVISE":
+        return {"answer": "검토 사항 확인했어요. 이번 초안은 문서에 넣지 않고, 말씀하신 점을 반영해서 다시 작성할게요. 완성되면 기획안 탭에서 다시 확인 요청을 드릴게요."}
     return {"answer": "알겠어요, 문서에는 넣지 않았어요. 초안은 태스크 카드에 남겨 둘게요. 어떤 점을 바꾸면 좋을지 말씀해 주시면 고쳐 볼게요."}
 
 
