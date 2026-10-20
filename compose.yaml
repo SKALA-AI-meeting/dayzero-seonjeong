@@ -10,11 +10,6 @@ services:
     environment: { POSTGRES_USER: dayzero, POSTGRES_PASSWORD: local_demo_only, POSTGRES_DB: dayzero }
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck: { test: ["CMD-SHELL", "pg_isready -U dayzero"], interval: 3s, retries: 20 }
-  rabbitmq:
-    image: rabbitmq:3.13-management
-    environment: { RABBITMQ_DEFAULT_USER: dayzero, RABBITMQ_DEFAULT_PASS: local_demo_only }
-    ports: ["15672:15672"]   # 관리 화면(로컬 확인용)
-    healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, retries: 20 }
   gateway:
     <<: *py
     command: uv run uvicorn gateway.app.main:app --host 0.0.0.0 --port 8000
@@ -33,8 +28,7 @@ services:
       GATEWAY_INTERNAL_URL: http://gateway:8000
       BUSINESS_MCP_URL: http://business-mcp:9101/mcp
       RAG_MCP_URL: http://rag-mcp:9102/mcp
-      RABBITMQ_URL: amqp://dayzero:local_demo_only@rabbitmq:5672/%2F
-    depends_on: [gateway, business-mcp, rag-mcp, rabbitmq]
+    depends_on: [gateway, business-mcp, rag-mcp]
   business-mcp:
     <<: *py
     command: uv run python -m business_mcp.server

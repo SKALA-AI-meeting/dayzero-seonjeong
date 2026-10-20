@@ -687,9 +687,9 @@ class ReportFailedIn(Strict):
 
 @router.post("/reports/{sid}/failed")
 def report_failed(sid: str, body: ReportFailedIn):
-    """대기열 최대 재시도 초과(DLQ) 시 리포트를 FAILED로 표시. 관리자 '다시 생성'으로 재발행 가능."""
+    """REPORT job 실패 시 리포트를 FAILED로 표시. 관리자 '다시 생성'으로 재시도 가능."""
     with tx(dsn()) as c:
-        r = one(c, "UPDATE reports SET status='FAILED', error_code='QUEUE_MAX_ATTEMPTS', attempts=attempts+1 WHERE id=%s AND session_id=%s AND status<>'READY' RETURNING id",
+        r = one(c, "UPDATE reports SET status='FAILED', error_code='REPORT_JOB_FAILED', attempts=attempts+1 WHERE id=%s AND session_id=%s AND status<>'READY' RETURNING id",
                 (body.report_id, sid))
         if r:
             emit(c, sid, "REPORT_FAILED", {"report_id": body.report_id}, admin_payload={"report_id": body.report_id, "error": body.error[:300]})

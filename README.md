@@ -32,7 +32,6 @@ dayzero-seonjeong/
 | business-mcp | 9101 `/mcp` | `business_mcp.server` — gateway 내부 API로만 전달 |
 | rag-mcp | 9102 `/mcp` | `rag_mcp.server` — pgvector 검색(읽기 전용 role) |
 | db | 5434(호스트) | `pgvector/pgvector:pg17` |
-| rabbitmq | 5672 / 15672(관리) | `rabbitmq:3.13-management` — 리포트 생성 작업 큐, 지연 재시도 3회, DLQ |
 
 확정 버전(MD 지침 대신 로컬 환경 기준): Python 3.11.9(uv), Node 26.7, Next 15.5, FastAPI 0.150, LangGraph 1.2, langgraph-checkpoint-postgres 3.2, mcp 2.3, sentence-transformers 6.1, PostgreSQL 17 + pgvector 0.8.7. 호스트 5432·5433은 이미 사용 중이라 DB 호스트 포트는 5434입니다.
 
@@ -40,14 +39,14 @@ dayzero-seonjeong/
 
 ### 준비물
 - Docker Desktop(실행 중), Python 3.11 + [uv](https://docs.astral.sh/uv/), Node.js(22 이상)
-- 사용 포트: 3100(web), 8000(gateway), 8001(agent), 9101/9102(MCP), 5434(PostgreSQL), 5672/15672(RabbitMQ)
+- 사용 포트: 3100(web), 8000(gateway), 8001(agent), 9101/9102(MCP), 5434(PostgreSQL)
 
 ### 최초 1회: 환경 파일
 ```bash
 cp .env.example .env
 ```
 `.env`에서 다음을 로컬 값으로 바꿉니다.
-- 컨테이너 주소 `@db:5432` → `@localhost:5434`, `rabbitmq:5672` → `localhost:5672`
+- 컨테이너 주소 `@db:5432` → `@localhost:5434`
 - `GATEWAY_INTERNAL_URL`, `AGENT_INTERNAL_URL`, `BUSINESS_MCP_URL`, `RAG_MCP_URL` → `http://localhost:포트`
 - 비밀값 `JWT_SECRET`, `INTERNAL_SERVICE_SECRET`, `SEED_ADMIN_PASSWORD`(빈 값이면 서버가 시작을 거절함)
 - 실제 LLM: `OPENAI_API_KEY`, 관측: `LANGSMITH_API_KEY`(선택)
@@ -56,24 +55,23 @@ cp .env.example .env
 ```bash
 ./infra/dev-up.sh                  # fixture 모드(.env의 LLM_MODE)
 LLM_MODE=live ./infra/dev-up.sh    # 실제 gpt-4o-mini
-./infra/dev-status.sh              # web·gateway·agent·MCP·RabbitMQ 상태
-./infra/dev-down.sh                # 서비스 종료(DB·큐 데이터 유지)
+./infra/dev-status.sh              # web·gateway·agent·MCP 상태
+./infra/dev-down.sh                # 서비스 종료(DB 데이터 유지)
 ./infra/dev-down.sh --infra        # 컨테이너까지 정지(볼륨은 삭제하지 않음)
 ```
-`dev-up.sh`가 하는 일: DB(pgvector pg17)·RabbitMQ 컨테이너 기동 → `uv sync` → 마이그레이션 → seed → (색인이 없으면) 벡터 색인 → gateway·business-mcp·rag-mcp·agent·web 백그라운드 실행 → 상태 확인. 로그는 `.run/logs/*.log`에 남습니다. 이미 떠 있는 서비스는 건너뜁니다.
+`dev-up.sh`가 하는 일: DB(pgvector pg17) 컨테이너 기동 → `uv sync` → 마이그레이션 → seed → (색인이 없으면) 벡터 색인 → gateway·business-mcp·rag-mcp·agent·web 백그라운드 실행 → 상태 확인. 로그는 `.run/logs/*.log`에 남습니다. 이미 떠 있는 서비스는 건너뜁니다.
 
 ### 사용해 보기
 1. http://localhost:3100/admin/login: `admin@dayzero.local` / `.env`의 `SEED_ADMIN_PASSWORD`
 2. "새 초대 만들기" → 링크 복사 → **다른 브라우저 또는 시크릿 창**에서 열어 지원자로 입장
 3. 시연 시간 이동: 관리자 세션 목록의 "시연: 이벤트로 이동"(00:10 분담 ~ 02:00 자동 제출, `APP_ENV=development`에서만 표시)
-4. 제출 후 관리자 "리포트 열기", RabbitMQ 관리 화면 http://localhost:15672 (dayzero / local_demo_only)
+4. 제출 후 관리자 "리포트 열기"
 
 ### 테스트·검증 (services/ 에서)
 ```bash
 uv run pytest -q tests/test_m0_auth.py                    # 인증 6건
 uv run python -m scripts.smoke_mcp                        # MCP 22건
 uv run python -m scripts.smoke_flow --mode live           # 시나리오 전체(agent 모드와 일치시킬 것)
-PYTHONPATH=. uv run python -m scripts.smoke_queue         # RabbitMQ 처리·재시도·DLQ
 uv run python -m scripts.eval_harness --suite harness-v1 --label baseline   # Harness 8요소
 uv run python -m scripts.restart_resume prepare && ./../infra/dev-down.sh && ./../infra/dev-up.sh && uv run python -m scripts.restart_resume decide  # AT-08
 ```
@@ -105,7 +103,7 @@ docker compose up -d
 
 ## 검증 상태
 
-AT-01~AT-17 판정과 근거는 [evidence/verification.md](evidence/verification.md)에 있습니다(PASS 13 / PARTIAL 4, 대기열 가산점 검증 포함). Harness 8요소 평가: `uv run python -m scripts.eval_harness --suite harness-v1 --label <label>` → `evals/results/`.
+AT-01~AT-17 판정과 근거는 [evidence/verification.md](evidence/verification.md)에 있습니다(리팩터링 중: 새 시나리오 기준으로 다시 작성 예정). Harness 8요소 평가: `uv run python -m scripts.eval_harness --suite harness-v1 --label <label>` → `evals/results/`.
 
 ## 근거와 구현 가정
 

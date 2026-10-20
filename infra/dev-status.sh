@@ -9,5 +9,4 @@ ok = lambda b: "✓" if b else "✗"
 print(f"{ok(h.get('status') == 'ok')} web+gateway   status={h.get('status', 'down')} db={h.get('db', '-')} mode={h.get('mode', '-')}")
 print(f"{ok(a.get('status') == 'ok')} agent         model={a.get('model', '-')} langsmith={a.get('langsmith', '-')}")
 m = a.get("mcp", {}); print(f"{ok(m.get('business') == 'up' and m.get('rag') == 'up')} MCP           business={m.get('business', '-')} rag={m.get('rag', '-')}")
-q = a.get("queue", {}); print(f"{ok(q.get('enabled') and 'counts' in q)} RabbitMQ      {q.get('counts', q)}")
 PY

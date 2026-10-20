@@ -58,15 +58,19 @@ class Worker:
 
     def handle(self, job: dict) -> str:
         if job["kind"] == "REPORT":
-            from shared import mq
-            if mq.enabled():
-                # 트랜잭션 아웃박스 릴레이: DB jobs(제출과 같은 트랜잭션에 기록) → RabbitMQ 작업 큐로 발행
-                mq.publish_report({"session_id": job["session_id"], "report_id": job["input"]["report_id"], "job_id": job["id"]})
-                return "DONE"
-            from .report import run_report
+            return self.run_report(job)
+        return self.run_agent(job)
+
+    def run_report(self, job: dict) -> str:
+        """REPORT job은 DB jobs 경로 하나로만 처리. 실패하면 리포트를 FAILED로 표시해 관리자 '다시 생성'으로 재시도."""
+        from .report import run_report
+        try:
             run_report(self.gw, job)
             return "DONE"
-        return self.run_agent(job)
+        except Exception as e:  # noqa: BLE001
+            log.error("report job %s failed: %s", job["id"], traceback.format_exc())
+            self.gw.post(f"/reports/{job['session_id']}/failed", {"report_id": job["input"]["report_id"], "error": str(e)[:300]})
+            return "FAILED"
 
     def run_agent(self, job: dict) -> str:
         rid, sid = job["run_id"], job["session_id"]
@@ -109,33 +113,11 @@ def _ticker(w: Worker) -> None:
         time.sleep(2)
 
 
-def _report_consumer(w: Worker) -> None:
-    """RabbitMQ 리포트 큐 컨슈머: 실패 시 지연 재시도(최대 3회), 최종 실패는 DLQ + 리포트 FAILED."""
-    from shared import mq
-    from .report import run_report
-
-    def handle(body: dict) -> None:
-        run_report(w.gw, {"session_id": body["session_id"], "input": {"report_id": body["report_id"]}})
-
-    def on_dead(body: dict, err: str) -> None:
-        w.gw.post(f"/reports/{body['session_id']}/failed", {"report_id": body["report_id"], "error": err[:300]})
-
-    while not w.stop.is_set():
-        try:
-            mq.consume_reports(handle, on_dead, w.stop)
-        except Exception as e:  # noqa: BLE001 — 브로커 재시작 등: 잠시 후 재연결
-            w.last_error = f"mq: {e}"
-            time.sleep(3)
-
-
 def start() -> Worker:
     global _worker
     _worker = Worker()
     threading.Thread(target=_worker.run_forever, name="job-worker", daemon=True).start()
     threading.Thread(target=_ticker, args=(_worker,), name="exam-ticker", daemon=True).start()
-    from shared import mq
-    if mq.enabled():
-        threading.Thread(target=_report_consumer, args=(_worker,), name="report-consumer", daemon=True).start()
     return _worker
 
 

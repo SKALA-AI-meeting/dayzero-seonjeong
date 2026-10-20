@@ -46,13 +46,6 @@ def health():
         except Exception:  # noqa: BLE001
             mcp[name] = "down"
     w = worker.current()
-    from shared import mq
-    queue = {"enabled": mq.enabled()}
-    if mq.enabled():
-        try:
-            queue["counts"] = mq.queue_counts()
-        except Exception as e:  # noqa: BLE001
-            queue["error"] = type(e).__name__
-    return {"status": "ok" if w else "starting", "mode": S.llm_mode, "queue": queue, "model": S.openai_model, "mcp": mcp,
+    return {"status": "ok" if w else "starting", "mode": S.llm_mode, "model": S.openai_model, "mcp": mcp,
             "langsmith": "enabled" if S.langsmith_enabled else "not_configured",
             "worker_last_error": w.last_error if w else None}

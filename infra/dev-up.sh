@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Day Zero 로컬 실행(검증된 방법): 인프라 컨테이너 + 서비스 5개를 한 번에 띄운다.
+# Day Zero 로컬 실행(검증된 방법): DB 컨테이너 + 서비스 5개를 한 번에 띄운다.
 #   사용: ./infra/dev-up.sh            (agent fixture 모드, 기본은 .env의 LLM_MODE)
 #         LLM_MODE=live ./infra/dev-up.sh  (실제 gpt-4o-mini, OPENAI_API_KEY 필요)
 # 이미 떠 있는 서비스(포트 사용 중)는 건너뛴다. 로그: .run/logs/*.log, PID: .run/*.pid
@@ -21,11 +21,8 @@ echo "== 1. 인프라 컨테이너 =="
 docker info >/dev/null 2>&1 || { echo "❌ Docker가 실행 중이 아닙니다."; exit 1; }
 up_container dayzero-db -e POSTGRES_USER=dayzero -e POSTGRES_PASSWORD=local_demo_only -e POSTGRES_DB=dayzero \
   -p "$DB_PORT":5432 -v dayzero_pgdata:/var/lib/postgresql/data pgvector/pgvector:pg17
-up_container dayzero-mq -e RABBITMQ_DEFAULT_USER=dayzero -e RABBITMQ_DEFAULT_PASS=local_demo_only \
-  -p 5672:5672 -p 15672:15672 rabbitmq:3.13-management
 for i in $(seq 1 30); do docker exec dayzero-db pg_isready -U dayzero >/dev/null 2>&1 && break; sleep 1; done
-for i in $(seq 1 40); do docker exec dayzero-mq rabbitmq-diagnostics -q ping >/dev/null 2>&1 && break; sleep 1; done
-echo "✓ DB(:$DB_PORT) · RabbitMQ(:5672, 관리 화면 :15672) 준비"
+echo "✓ DB(:$DB_PORT) 준비"
 
 echo "== 2. 의존성·마이그레이션·seed·색인 =="
 (cd services && uv sync -q && uv run alembic upgrade head && uv run python -m scripts.seed)
