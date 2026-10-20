@@ -178,3 +178,9 @@ def hidden_document_ids(c, s: dict) -> list[str]:
     em = elapsed_min(s)
     return [d["id"] for d in all_(c, "SELECT id, available_after_min FROM documents WHERE scenario_id=%s", (s["scenario_id"],))
             if d["available_after_min"] > em]
+
+
+def section_sha(sections: dict, section: str) -> str:
+    """Staleness key for a section-scoped proposal: only the target section's content matters."""
+    import hashlib
+    return hashlib.sha256((sections.get(section) or "").encode()).hexdigest()

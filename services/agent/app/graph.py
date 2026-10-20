@@ -177,23 +177,25 @@ def fixture_answer(state: WorkState) -> str:
 
 
 def section_draft(state: WorkState, section: str) -> str:
+    """Deterministic, document-style section body built only from tool results and company documents."""
     rows = {r["segment"]: r for r in _metrics(state)}
     if section == "similar_cases":
-        return ("[이도현 초안 · 유사 서비스 사례]\n"
-                "- '같이달려'(가상, 동네 운동 모임 앱): 첫 참가자에게 짝꿍을 매칭해 어색함을 줄이는 방식 (지난주 회의록)\n"
-                "- '한바퀴'(가상, 걷기 모임 앱): 모임이 끝나면 다음 모임 일정을 자동으로 안내하는 방식 (지난주 회의록)\n"
-                "- 비교 기준(안): 첫 참가자 적응 지원 여부, 다음 일정 안내 방식, 운영 부담\n"
+        return ("- 같이달려(가상, 동네 운동 모임 앱): 첫 참가자에게 짝꿍을 매칭해 처음 온 사람의 어색함을 줄이는 방식 (지난주 회의록)\n"
+                "- 한바퀴(가상, 걷기 모임 앱): 모임이 끝나면 다음 모임 일정을 자동으로 안내하는 방식 (지난주 회의록)\n"
+                "- 비교 기준(안): 첫 참가자 적응 지원 여부, 다음 일정 안내 방식, 모임 리더 운영 부담, 무료 제공 가능 여부(운영 정책)\n"
                 "- 한계: 두 사례의 효과 수치는 확인되지 않음 (지난주 회의록)")
     if section == "metrics_timeline":
-        cur = "22%"
-        lines = ["[이도현 초안 · 성공 지표와 출시 일정]",
-                 f"- 핵심 지표: 첫 모임 참가자의 30일 내 재참여율(현재 {cur}, 분모: 첫 모임 참가자) (지표 현황)"]
+        lines = ["- 핵심 지표: 첫 모임 참가자의 30일 내 두 번째 모임 참가율(재참여율), 현재 22% · 분모는 첫 모임 참가자 (지표 현황)"]
         if rows:
-            lines.append("- 보조 지표: 첫 모임 규모별 재참여율 — " + ", ".join(f"{r['label']} {pct(r['rejoin_rate'])}" for r in rows.values()))
-        lines += ["- 목표치는 기능 범위가 정해진 뒤 함께 정하는 것이 좋겠습니다(근거 없는 목표치를 넣지 않음).",
-                  "- 출시 일정(안): 설계 → 개발 → 베타 순으로 진행하고, 구체 일정은 개발 리드와 확정 (지난주 회의록)"]
+            lines.append("- 보조 지표: 첫 모임 규모별 재참여율 — " + ", ".join(f"{r['label']} {pct(r['rejoin_rate'])}" for r in rows.values()) + " (지표 현황)")
+        lines += ["- 목표치: 기능 범위 확정 후 설정 필요(현재 근거 자료 없음)",
+                  "- 출시 일정: 설계 → 개발 → 베타 순서로 진행하며 구체 일정은 개발 리드와 확정 필요 (지난주 회의록)"]
         return "\n".join(lines)
-    return "[이도현 초안]\n" + fixture_answer(state)
+    return to_doc(fixture_answer(state))
+
+
+def to_doc(text: str) -> str:
+    return H.to_document_body(text)
 
 
 # ---- live LLM ----------------------------------------------------------------------------
@@ -419,23 +421,50 @@ def _dedupe(cits: list[dict]) -> list[dict]:
 
 # ---- delegated mutation path ------------------------------------------------------------------
 
+SECTION_TITLE = {"problem": "문제 정의와 대상 사용자", "interview_evidence": "사용자 인터뷰에서 찾은 근거", "features": "핵심 기능 제안",
+                 "similar_cases": "비슷한 서비스 사례", "metrics_timeline": "성공 지표와 출시 일정"}
+
+
+def write_section_live(state: WorkState, section: str, current: str) -> tuple[str, dict]:
+    """Separate document-writing step: section body only, from collected evidence (not the chat reply)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+    system, _ = H.load_prompt("section-writer-v1")
+    evidence = "\n\n".join(f"[{r['tool']}] {H.tool_message_content(r['payload'])}" for r in state.get("tool_results", []) if r["payload"]["ok"])
+    revise = (state["facts"]["ctx"]["run"]["input"] or {}).get("revise_comment")
+    user = (f"[섹션] {SECTION_TITLE.get(section, section)}\n[현재 섹션 내용]\n{current or '(비어 있음)'}\n"
+            + (f"[지원자 수정 요청]\n{revise}\n" if revise else "")
+            + f"[근거 자료]\n{H.truncate_tokens(evidence, 3000) or '(없음)'}\n\n위 근거만으로 이 섹션에 추가할 본문을 작성하라.")
+    deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
+    ai = H.with_retries(lambda: llm().invoke([SystemMessage(system), HumanMessage(H.mask_pii(user))]), deadline=deadline)
+    um = getattr(ai, "usage_metadata", None) or {}
+    usage = dict(state.get("token_usage") or {"input": 0, "output": 0})
+    usage["input"] += um.get("input_tokens", 0)
+    usage["output"] += um.get("output_tokens", 0)
+    return H.to_document_body(ai.content or ""), usage
+
+
 @_timed
 def draft_delegation(state: WorkState) -> dict:
     ctx = state["facts"]["ctx"]
     section = ctx["task"]["template_key"]
-    summary = state.get("answer") if S.llm_mode == "live" and state.get("answer") else section_draft(state, section)
-    if H.validate_output(summary, _allowed_numbers(state)):
-        summary = section_draft(state, section)
     art = ctx["artifact"]
     current = art["sections"].get(section, "")
-    content = (current + "\n\n" if current.strip() else "") + summary
+    usage = state.get("token_usage")
+    body, mode = "", "fixture"
+    if S.llm_mode == "live":
+        body, usage = write_section_live(state, section, current)
+        mode = "live"
+    allowed = _allowed_numbers(state) | H.numbers_in(current)
+    if not body or H.validate_output(body, allowed) or H.ungrounded_units(body, allowed):
+        body, mode = section_draft(state, section), ("fallback" if mode == "live" else "fixture")
+    content = (current.rstrip() + "\n" if current.strip() else "") + body
     cits = [c for c in _dedupe(state.get("citations", [])) if c.get("document_id") not in ("rejoin_facts", "interview_notes")][:5]
     args = {"task_id": state["task_id"], "section": section, "base_version": art["version"], "content": content,
             "citations": [{"document_id": c["document_id"], "chunk_id": c.get("chunk_id"), "version": c.get("version", 1),
                            "quote": c["quote"]} for c in cits]}
-    gw.event(state["run_id"], "TASK_RESULT", {"result": {"summary": summary, "citations": cits}}, key="task-result")
+    gw.event(state["run_id"], "TASK_RESULT", {"result": {"summary": body, "citations": cits, "draft_mode": mode}}, key="task-result")
     return {"proposed_action": {"tool_name": "patch_artifact_section", "args": args,
-                                "base_versions": {"artifact": art["version"]}}, "answer": summary}
+                                "base_versions": {"artifact": art["version"]}}, "answer": body, "token_usage": usage}
 
 
 @_timed

@@ -161,6 +161,29 @@ def validate_output(text: str, allowed_numbers: set[str]) -> list[str]:
     return problems
 
 
+UNIT_NUMBER = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(%|퍼센트|주|개월|달|일|명|회|배)")
+
+
+def ungrounded_units(text: str, allowed: set[str]) -> list[str]:
+    """Numbers with units (%, 기간, 인원) are checked regardless of digit count — 목표치·일정 날조 방지."""
+    out = []
+    for n, unit in UNIT_NUMBER.findall(text):
+        norm = n.replace(",", "")
+        if norm not in allowed:
+            out.append(f"ungrounded_unit:{n}{unit}")
+    return out
+
+
+CHAT_LINE = re.compile(r"(다음은|초안입니다|초안을\s*(작성|정리)|말씀해\s*주|궁금|도움이\s*되|확인해\s*주세요|알려\s*주세요|좋겠습니다!|감사합니다|^\s*-{3,}\s*$|^\s*#{1,6}\s)")
+
+
+def to_document_body(text: str) -> str:
+    """Strip chat framing (intro/outro, separators, headings) so only section body remains."""
+    lines = [ln.rstrip() for ln in text.strip().splitlines()]
+    kept = [ln for ln in lines if ln.strip() and not CHAT_LINE.search(ln)]
+    return "\n".join(kept).strip()
+
+
 def numbers_in(obj: Any) -> set[str]:
     out: set[str] = set()
     def walk(v: Any) -> None:

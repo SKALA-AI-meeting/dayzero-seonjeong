@@ -92,10 +92,26 @@ def main() -> int:
     c.post(f"/sessions/{sid}/approvals/{by_sec['similar_cases']['id']}/decision", json={"decision": "APPROVE"})
     s = wait(lambda s: s["artifact"]["version"] == 2)
     check("유사 사례 승인 → 반영", "같이달려" in s["artifact"]["sections"]["similar_cases"])
-    a2 = by_sec["metrics_timeline"]
-    c.post(f"/sessions/{sid}/approvals/{a2['id']}/decision", json={"decision": "REJECT"})
+    r = c.post(f"/sessions/{sid}/approvals/{by_sec['metrics_timeline']['id']}/decision", json={"decision": "APPROVE"})
+    s = wait(lambda s: s["artifact"]["version"] == 3)
+    check("두 번째 카드 승인도 반영(다른 섹션 변경으로 무효 처리되지 않음)",
+          r.status_code == 202 and s["artifact"]["sections"]["metrics_timeline"].strip() != "", f"{r.status_code} {r.text[:80]}")
+    import re as _re
+    chat = _re.compile(r"(다음은|초안입니다|말씀해\s*주|궁금|감사합니다|^-{3,}$|^#{1,6}\s)", _re.M)
+    bodies = {k: s["artifact"]["sections"][k] for k in ("similar_cases", "metrics_timeline")}
+    check("동료 초안이 문서체(대화체·구분선·제목 없음)", not any(chat.search(v) for v in bodies.values()), str(bodies)[:200])
+    units = _re.findall(r"(\d[\d.]*)\s*(%|주|개월|달)", bodies["metrics_timeline"])
+    check("근거 없는 목표치·기간 없음(% 수치는 22/31/24/15.5만)", all(n in ("22", "31", "24", "15.5") and u == "%" for n, u in units), str(units))
+    t = next(t for t in s["tasks"] if t["template_key"] == "metrics_timeline")
+    s = wait(lambda s: next(x for x in s["tasks"] if x["template_key"] == "metrics_timeline")["status"] == "REVIEW")
+    t = next(x for x in s["tasks"] if x["template_key"] == "metrics_timeline")
+    r = c.post(f"/sessions/{sid}/tasks/{t['id']}/review", json={"decision": "REVISE", "comment": "보조 지표를 조금 더 구체적으로", "source_refs": []})
+    check("수정 요청 → 새 확인 카드", r.status_code == 200 and r.json().get("run_id"))
+    s = wait(lambda s: len(s["approvals"]) == 1, 120)
+    v_before, mt_before = s["artifact"]["version"], s["artifact"]["sections"]["metrics_timeline"]
+    c.post(f"/sessions/{sid}/approvals/{s['approvals'][0]['id']}/decision", json={"decision": "REJECT"})
     s = wait(lambda s: not s["approvals"])
-    check("성공 지표 초안 거절 → 무변경", s["artifact"]["sections"]["metrics_timeline"] == "")
+    check("거절 → 무변경", s["artifact"]["version"] == v_before and s["artifact"]["sections"]["metrics_timeline"] == mt_before)
     r = c.patch(f"/sessions/{sid}/artifact", json={"base_version": s["artifact"]["version"], "section": "similar_cases",
                                                     "content": "x", "source_refs": []})
     check("지원자는 모든 섹션 직접 편집 가능(이력 기록)", r.status_code == 200)

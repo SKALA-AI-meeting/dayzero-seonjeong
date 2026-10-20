@@ -13,7 +13,7 @@ from shared.config import SECTION_IDS, settings
 from shared.db import J, all_, one, tx
 
 from ..auth import Principal, admin, candidate, principal
-from ..domain import (active_run, create_run, elapsed_min, emit, insert_message, lock_session, now, read_session,
+from ..domain import (active_run, create_run, elapsed_min, section_sha, emit, insert_message, lock_session, now, read_session,
                       record_action, task_dto)
 from ..timeline import apply_split, fire_due, submit_session
 from ..errors import ApiError
@@ -168,9 +168,9 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
         if want == "APPROVED" and (not d or d["revoked_at"] or d["expires_at"] < now()):
             c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (aid,))
             raise ApiError(410, "APPROVAL_EXPIRED", "위임이 취소되었거나 만료되었습니다")
-        if want == "APPROVED":
-            art = one(c, "SELECT version FROM artifacts WHERE session_id=%s", (sid,))
-            if art["version"] != a["base_versions"].get("artifact"):
+        if want == "APPROVED" and a["tool_name"] == "patch_artifact_section":
+            art = one(c, "SELECT sections FROM artifacts WHERE session_id=%s", (sid,))
+            if section_sha(art["sections"], a["args"]["section"]) != a["base_versions"].get("section_sha"):
                 c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (aid,))
                 want = "REJECTED_STALE"
         c.execute("UPDATE approvals SET status=%s, decided_at=now(), decision_actor_id=%s WHERE id=%s",
@@ -183,7 +183,7 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
         emit(c, sid, "APPROVAL_DECIDED", {"approval_id": aid, "decision": body.decision, "stale": want == "REJECTED_STALE"},
              run_id=str(run["id"]))
     if want == "REJECTED_STALE":
-        raise ApiError(409, "APPROVAL_STALE", "승인 대기 중 기획안이 변경되어 이 제안은 무효가 되었습니다. 변경 없이 종료합니다")
+        raise ApiError(409, "APPROVAL_STALE", "확인 대기 중에 이 섹션 내용이 바뀌어 초안을 넣지 않았습니다. 필요하면 태스크에서 수정 요청해 주세요")
     return {"run_id": str(run["id"]), "status": "QUEUED"}
 
 

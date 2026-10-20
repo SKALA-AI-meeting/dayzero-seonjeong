@@ -14,7 +14,7 @@ from shared.db import J, all_, one, tx
 
 from ..auth import internal_service, issue_capability, verify_capability
 from ..business import ToolError, interview_notes, rejoin_metrics
-from ..domain import (artifact_dto, hidden_document_ids, emit, insert_message, list_tasks, lock_session, now,
+from ..domain import (artifact_dto, hidden_document_ids, section_sha, emit, insert_message, list_tasks, lock_session, now,
                       record_action, task_dto, to_jsonable)
 from ..errors import ApiError
 
@@ -305,10 +305,15 @@ def proposal(rid: str, body: ProposalIn):
             t = one(c, "SELECT * FROM tasks WHERE id=%s", (body.args.get("task_id"),))
             ba = {"before": t["status"] if t else "", "after": body.args.get("status"), "task_id": body.args.get("task_id")}
         h = args_hash(body.tool_name, body.args)
+        base_versions = dict(body.base_versions)
+        if body.tool_name == "patch_artifact_section":
+            # 서버가 대상 섹션의 현재 내용 해시를 기록 — 다른 섹션 변경은 이 제안을 무효로 만들지 않는다
+            base_versions.update({"section": body.args["section"], "section_sha": section_sha(art["sections"], body.args["section"]),
+                                  "artifact": art["version"]})
         a = one(c, """INSERT INTO approvals(session_id,run_id,interrupt_id,tool_name,args,args_hash,base_versions,
                       delegation_id,before_after,status,expires_at)
                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',now()+interval '10 minutes') RETURNING *""",
-                (sid, rid, body.interrupt_id, body.tool_name, J(body.args), h, J(body.base_versions),
+                (sid, rid, body.interrupt_id, body.tool_name, J(body.args), h, J(base_versions),
                  body.delegation_id, J(ba)))
         c.execute("UPDATE runs SET status='WAITING_APPROVAL', updated_at=now() WHERE id=%s", (rid,))
         emit(c, sid, "APPROVAL_REQUIRED", {"approval_id": str(a["id"]), "task_id": body.args.get("task_id"),
@@ -400,9 +405,9 @@ def execute_write(c, sid: str, run: dict, cap: dict, tool: str, args: dict) -> d
     check_scope(c, sid, run, tool, args)
     if tool == "patch_artifact_section":
         art = one(c, "SELECT * FROM artifacts WHERE session_id=%s FOR UPDATE", (sid,))
-        if art["version"] != a["base_versions"].get("artifact"):
+        if section_sha(art["sections"], args["section"]) != a["base_versions"].get("section_sha"):
             c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (approval_id,))
-            raise ToolError("VERSION_CONFLICT", "승인 대기 중 기획안이 변경되었습니다(APPROVAL_STALE)")
+            raise ToolError("VERSION_CONFLICT", "승인 대기 중 해당 섹션이 변경되었습니다(APPROVAL_STALE)")
         sections = dict(art["sections"])
         sections[args["section"]] = args["content"]
         new_v = art["version"] + 1
