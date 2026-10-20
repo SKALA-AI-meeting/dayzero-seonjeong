@@ -137,10 +137,14 @@ def run_context(rid: str):
         deleg = one(c, "SELECT * FROM delegations WHERE id=%s", (task["delegation_id"],)) if task and task["delegation_id"] else None
         st = s["policy_state"] or {}
         occurred = [o["event_id"] for o in all_(c, "SELECT event_id FROM event_occurrences WHERE session_id=%s", (sid,))]
+        pivot = one(c, "SELECT content FROM messages WHERE session_id=%s AND meta->>'event_id'='T-PIVOT' LIMIT 1", (sid,))
         hidden = hidden_document_ids(c, s)
     return to_jsonable({
         "scenario_state": {"error_open": bool(st.get("error_open")), "events": occurred,
-                           "interviews_released": "user-interviews" not in hidden},
+                           "interviews_released": "user-interviews" not in hidden,
+                           "split_confirmed": bool((st.get("split") or {}).get("confirmed")),
+                           "colleague_sections": [t["template_key"] for t in list_tasks(c, sid) if t["owner"] == "COLLEAGUE" and t["template_key"]],
+                           "pivot_text": pivot["content"] if pivot else None},
         "run": {"id": rid, "kind": r["kind"], "status": r["status"], "input": r["input"], "trace_id": r["trace_id"],
                 "source_message_id": r["source_message_id"], "task_id": r["task_id"], "thread_id": r["thread_id"]},
         "session": {"id": sid, "status": s["status"], "phase": s["phase"]},
@@ -180,7 +184,7 @@ def run_state(rid: str, body: RunStateIn):
         elif body.status in ("SUCCEEDED", "FAILED", "CANCELLED"):
             if r["kind"] == "DELEGATED" and r["task_id"] and body.status == "SUCCEEDED":
                 # 위임 작업 종료(승인 반영 또는 거절) → 지원자 검토 대기. DONE은 지원자 review만 결정.
-                t = one(c, "UPDATE tasks SET status='REVIEW', version=version+1 WHERE id=%s AND status='IN_PROGRESS' RETURNING *",
+                t = one(c, "UPDATE tasks SET status='REVIEW', version=version+1 WHERE id=%s AND status='IN_PROGRESS' AND owner='COLLEAGUE' RETURNING *",
                         (r["task_id"],))
                 if t:
                     emit(c, sid, "TASK_UPDATED", {"task": task_dto(t)}, run_id=rid)
@@ -565,3 +569,53 @@ def build_report(sid: str, body: BuildIn):
         c.execute("UPDATE reports SET status='READY', body=%s, attempts=attempts+1 WHERE id=%s", (J(to_jsonable(body_)), rep["id"]))
         emit(c, sid, "REPORT_READY", {"report_id": str(rep["id"])})
     return {"status": "READY"}
+
+
+
+# ---- 채팅 수정 요청 → 실제 섹션 수정 작업 생성 ---------------------------------------------
+
+class FollowupIn(Strict):
+    sections: list[str] = Field(min_length=1, max_length=3)
+    instruction: str = Field(max_length=2000)
+
+
+@router.post("/runs/{rid}/followup")
+def followup(rid: str, body: FollowupIn):
+    """지원자가 채팅으로 동료에게 섹션 수정을 요청하면, 해당 섹션의 실제 재작성 run을 만든다.
+    반영은 기존과 같이 확인 카드(승인) 후에만 이루어진다."""
+    from shared.config import EXAM_MINUTES, SECTION_IDS
+    from ..domain import create_run
+    created, skipped = [], []
+    with tx(dsn()) as c:
+        r = one(c, "SELECT * FROM runs WHERE id=%s", (rid,))
+        if not r:
+            raise ApiError(404, "NOT_FOUND", "run 없음")
+        sid = str(r["session_id"])
+        s = lock_session(c, sid)
+        if s["status"] != "ACTIVE":
+            return {"created": [], "skipped": body.sections}
+        for sec in body.sections:
+            if sec not in SECTION_IDS:
+                continue
+            t = one(c, "SELECT * FROM tasks WHERE session_id=%s AND template_key=%s FOR UPDATE", (sid, sec))
+            busy = one(c, """SELECT 1 FROM runs WHERE session_id=%s AND task_id=%s AND kind='DELEGATED'
+                             AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')""", (sid, t["id"]))
+            if busy:
+                skipped.append(sec)
+                continue
+            d = one(c, "SELECT * FROM delegations WHERE id=%s", (t["delegation_id"],)) if t["delegation_id"] else None
+            if not d or d["revoked_at"] or d["expires_at"] < now() or sec not in d["section_allowlist"]:
+                d = one(c, """INSERT INTO delegations(session_id,task_id,source_message_id,tool_allowlist,section_allowlist,constraints,expires_at)
+                              VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                        (sid, t["id"], r["source_message_id"], J(["get_interview_notes", "get_rejoin_metrics", "search_docs"]),
+                         J([sec]), J({"chat_request": True}), s["started_at"] + timedelta(minutes=EXAM_MINUTES)))
+                c.execute("UPDATE tasks SET delegation_id=%s WHERE id=%s", (d["id"], t["id"]))
+            if t["owner"] == "COLLEAGUE" and t["status"] in ("REVIEW", "DONE", "TODO"):
+                t2 = one(c, "UPDATE tasks SET status='IN_PROGRESS', version=version+1 WHERE id=%s RETURNING *", (t["id"],))
+                emit(c, sid, "TASK_UPDATED", {"task": task_dto(t2)}, run_id=rid)
+            create_run(c, sid, "DELEGATED", source_message_id=str(r["source_message_id"]) if r["source_message_id"] else None,
+                       task_id=str(t["id"]), prompt_version="colleague-v2",
+                       input_={"revise_comment": body.instruction, "section": sec, "delegation_id": str(d["id"]), "mode": "rewrite"})
+            record_action(c, sid, "COLLEAGUE", "REVISION_STARTED", str(t["id"]), {"section": sec, "via": "chat"})
+            created.append(sec)
+    return {"created": created, "skipped": skipped}

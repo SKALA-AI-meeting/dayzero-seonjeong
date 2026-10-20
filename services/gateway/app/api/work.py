@@ -127,16 +127,17 @@ def review_task(sid: str, tid: str, body: ReviewIn, p: Principal = Depends(candi
             d = one(c, "SELECT * FROM delegations WHERE id=%s", (t["delegation_id"],))
             if not d or d["revoked_at"] or d["expires_at"] < now():
                 raise ApiError(409, "APPROVAL_EXPIRED", "위임이 만료되어 수정 요청을 할 수 없습니다. 새로 위임해 주세요")
-            if active_run(c, sid):
-                raise ApiError(409, "RUN_BUSY", "진행 중인 동료 작업이 있습니다")
+            if one(c, """SELECT 1 FROM runs WHERE session_id=%s AND task_id=%s AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')""",
+                   (sid, tid)):
+                raise ApiError(409, "RUN_BUSY", "이 태스크는 이미 동료가 작업 중입니다")
         t = one(c, "UPDATE tasks SET status=%s, version=version+1 WHERE id=%s RETURNING *", (new_status, tid))
         refs = [r.model_dump() for r in body.source_refs]
         record_action(c, sid, "CANDIDATE", "TASK_REVIEWED", tid,
                             {"decision": body.decision, "comment": body.comment, "source_refs": refs, "owner": "COLLEAGUE"})
         if body.decision == "REVISE":
             run = create_run(c, sid, "DELEGATED", task_id=tid, source_message_id=None, prompt_version="colleague-v2",
-                             input_={"revise_comment": body.comment, "delegation_id": str(t["delegation_id"]),
-                                     "section": t["template_key"]})
+                             input_={"revise_comment": body.comment or "검토 후 수정 요청", "delegation_id": str(t["delegation_id"]),
+                                     "section": t["template_key"], "mode": "rewrite"})
             run_id = str(run["id"])
         emit(c, sid, "TASK_UPDATED", {"task": task_dto(t)}, run_id=run_id)
     return {"task": task_dto(t), "run_id": run_id}

@@ -94,6 +94,24 @@ def load_context(state: WorkState) -> dict:
 
 ANSWER_RE = re.compile(r"(정답|답\s*알려|대신\s*(써|작성|결정|정해)|최종안\s*(써|작성))")
 RECHECK_RE = re.compile(r"(유료|멤버십|결제|정책|재검토|다시\s*확인|확인해\s*(주|보)|맞나요|충돌|안\s*될|불가)")
+FEEDBACK_RE = re.compile(r"(피드백|봐\s*주|검토|확인\s*(해|하고|부탁|좀)|어떤가요|어때요|의견)")
+DOC_REF_RE = re.compile(r"(작성|섹션|\d\s*번|기획안|문서|초안|썼|적었)")
+REVISE_RE = re.compile(r"(수정|고쳐|고치|반영|업데이트|다시\s*(작성|써|정리)|바꿔|보완)")
+ASK_RE = re.compile(r"(부탁|해\s*주|해줄|해주실|해\s*줘|주실\s*수|가능할까|할\s*수\s*있을까|해\s*달)")
+SECTION_WORDS = [("problem", ("문제 정의", "문제정의", "대상 사용자", "대상")), ("interview_evidence", ("인터뷰",)),
+                 ("features", ("핵심 기능", "기능 제안")), ("similar_cases", ("사례", "유사 서비스", "비슷한 서비스")),
+                 ("metrics_timeline", ("지표", "일정", "출시"))]
+
+
+def requested_sections(text: str, scen: dict) -> list[str]:
+    secs = [sid for sid, words in SECTION_WORDS if any(w in text for w in words)]
+    if not secs:
+        secs = list(scen.get("colleague_sections") or [])
+        if scen.get("pivot_text") and any(w in text for w in ("공지", "변경", "대상", "방향")) and "problem" not in secs:
+            secs.insert(0, "problem")
+    return secs[:3]
+
+
 READ_RE = re.compile(r"(조사|조회|찾아|알려|보여|수치|지표|재참여|비율|인터뷰|문서|정책|회의록|사례|규모|사용자|자료)")
 
 
@@ -106,6 +124,11 @@ def classify_request(state: WorkState) -> dict:
     scen = state["facts"]["ctx"].get("scenario_state") or {}
     if state["kind"] == "COLLEAGUE" and scen.get("error_open") and RECHECK_RE.search(text):
         return {"intent": "policy_recheck"}
+    if state["kind"] == "COLLEAGUE" and scen.get("split_confirmed") and REVISE_RE.search(text) and ASK_RE.search(text) \
+            and not FEEDBACK_RE.search(text.split("수정")[0][-6:] if "수정" in text else ""):
+        return {"intent": "revise_request"}
+    if state["kind"] == "COLLEAGUE" and FEEDBACK_RE.search(text) and DOC_REF_RE.search(text):
+        return {"intent": "feedback"}
     if ANSWER_RE.search(text):
         return {"intent": "answer_request"}
     if READ_RE.search(text):
@@ -116,7 +139,7 @@ def classify_request(state: WorkState) -> dict:
 @_timed
 def select_help(state: WorkState) -> dict:
     return {"help_id": {"delegated": "H3", "investigate": "H2", "policy_recheck": "H2",
-                        "answer_request": "H1", "conversation": "H1"}[state["intent"]]}
+                        "answer_request": "H1", "conversation": "H1", "revise_request": "H3", "feedback": "H1"}[state["intent"]]}
 
 
 # ---- fixture planner (deterministic, LLM_MODE=fixture) ------------------------------------
@@ -196,6 +219,12 @@ def section_draft(state: WorkState, section: str) -> str:
         lines += ["- 목표치: 기능 범위 확정 후 설정 필요(현재 근거 자료 없음)",
                   "- 출시 일정: 설계 → 개발 → 베타 순서로 진행하며 구체 일정은 개발 리드와 확정 필요 (지난주 회의록)"]
         return "\n".join(lines)
+    pivot = (state["facts"]["ctx"].get("scenario_state") or {}).get("pivot_text")
+    if section == "problem":
+        target = "3개월 이상 모임에 참여하지 않은 사용자(팀장 요구사항 변경)" if pivot else "첫 모임 참가자"
+        return (f"- 대상 사용자: {target}\n"
+                "- 현황: 첫 모임 참가자의 30일 내 재참여율 22% (지표 현황)\n"
+                "- 문제 정의와 우선순위는 담당자가 확정 필요")
     return to_doc(fixture_answer(state))
 
 
@@ -233,6 +262,8 @@ def reason(state: WorkState) -> dict:
     """Decide next tool call(s) or final answer, inside loop limits."""
     intent = state["intent"]
     scen = state["facts"]["ctx"].get("scenario_state") or {}
+    if intent == "revise_request":
+        return {"plan": []}
     if S.llm_mode != "live":
         if intent in ("answer_request", "conversation"):
             return {"plan": []}
@@ -275,6 +306,14 @@ def reason(state: WorkState) -> dict:
             first = body.split("\n")[0]
             state.setdefault("citations", []).append({"document_id": doc_id, "chunk_id": None, "version": 1,
                                                        "quote": first.split(". ")[0].rstrip(".") + "."})
+        art = (ctx.get("artifact") or {}).get("sections") or {}
+        doc_lines = [f"{i + 1}. {SECTION_TITLE[k]}\n{H.truncate_tokens(art.get(k) or '(비어 있음)', 500)}"
+                     for i, k in enumerate(["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"])]
+        extra.append("[현재 공유 기획안 — 섹션 번호는 아래 순서]\n" + "\n\n".join(doc_lines))
+        if state["intent"] == "feedback":
+            extra.append("[지시] 지원자가 작성한 섹션에 대한 피드백을 요청했다. 위 기획안 본문을 지금 읽고 이 메시지 안에서 바로 피드백하라. "
+                         "'확인해 볼게요', '잠시만 기다려 주세요'처럼 나중으로 미루지 마라. 좋은 점 1개와 보완할 점 1~2개를 회사 자료 근거와 함께 "
+                         "구체적으로 말하고, 최종 결정은 지원자에게 맡겨라. 섹션이 비어 있으면 비어 있다고 말하라.")
         speaker = {"CANDIDATE": "지원자", "MANAGER": "팀장 한서윤", "SYSTEM": "시스템 알림", "COLLEAGUE": "이도현", "ASSISTANT": "AI 어시스턴트"}
         msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": H.mask_pii(pack.render_user_context() + ("\n\n" + "\n\n".join(extra) if extra else ""))}]
@@ -362,6 +401,21 @@ def validate_output(state: WorkState) -> dict:
     if intent == "answer_request":
         return {"answer": "제가 정답을 정하기보다는 같이 근거를 보고 정하시는 게 좋을 것 같아요. 어떤 자료부터 볼까요? "
                           "지표 현황, 운영 정책, 회의록 중에 골라 주시면 정리해 드릴게요."}
+    if intent == "revise_request":
+        scen = state["facts"]["ctx"].get("scenario_state") or {}
+        secs = requested_sections(state["request"], scen)
+        if not secs:
+            return {"answer": "어느 섹션을 고치면 될지 알려 주시겠어요? 제가 맡은 섹션이 아직 없어서 바로 시작하기 어려워요."}
+        r = gw.post(f"/runs/{state['run_id']}/followup", {"sections": secs, "instruction": state["request"][:2000]})
+        made = [SECTION_TITLE[x] for x in r.get("created", [])]
+        busy = [SECTION_TITLE[x] for x in r.get("skipped", [])]
+        parts = []
+        if made:
+            parts.append(f"네, {', '.join(made)} 섹션을 지금 내용과 요청하신 점을 확인해서 다시 작성할게요. "
+                         "다 쓰면 문서에 넣기 전에 기획안 탭에서 확인 요청을 드릴게요.")
+        if busy:
+            parts.append(f"{', '.join(busy)} 섹션은 이미 작업 중이라 그 결과가 나오면 함께 봐 주세요.")
+        return {"answer": " ".join(parts) or "지금은 수정할 섹션을 찾지 못했어요. 섹션 이름을 알려 주시겠어요?"}
     if intent == "policy_recheck" and S.llm_mode != "live":
         quote = ""
         for r in state.get("tool_results", []):
@@ -371,6 +425,13 @@ def validate_output(state: WorkState) -> dict:
                 " 제가 제안한 유료 멤버십은 올해 정책과 맞지 않아서 철회할게요. 짚어 주셔서 감사합니다. "
                 "대신 결제 없이 재참여를 돕는 방향으로 같이 다시 생각해 보면 좋겠어요.")
         return {"answer": text, "facts": {**state["facts"], "corrected": True}}
+    if intent == "feedback" and S.llm_mode != "live":
+        art = (state["facts"]["ctx"].get("artifact") or {}).get("sections") or {}
+        filled = [SECTION_TITLE[k] for k in ["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"] if (art.get(k) or "").strip()]
+        if not filled:
+            return {"answer": "지금 기획안을 열어 보니 아직 작성된 섹션이 없어요. 작성하신 뒤 말씀해 주시면 바로 볼게요."}
+        return {"answer": f"방금 기획안을 확인했어요. {', '.join(filled)} 섹션이 작성되어 있네요. 지표 현황의 재참여율 22%와 연결해 대상과 문제를 "
+                          "조금 더 구체적으로 적으면 좋을 것 같아요. 어떻게 반영할지는 직접 정해 주세요."}
     if intent == "conversation" and S.llm_mode != "live":
         return {"answer": "말씀 감사해요. 그 방향으로 생각해 볼게요. 필요하신 자료가 있으면 편하게 말씀해 주세요."}
     text = (state.get("answer") or "") if S.llm_mode == "live" else fixture_answer(state)
@@ -441,10 +502,17 @@ def write_section_live(state: WorkState, section: str, current: str) -> tuple[st
     from langchain_core.messages import HumanMessage, SystemMessage
     system, _ = H.load_prompt("section-writer-v1")
     evidence = "\n\n".join(f"[{r['tool']}] {H.tool_message_content(r['payload'])}" for r in state.get("tool_results", []) if r["payload"]["ok"])
-    revise = (state["facts"]["ctx"]["run"]["input"] or {}).get("revise_comment")
+    run_input = state["facts"]["ctx"]["run"]["input"] or {}
+    revise = run_input.get("revise_comment")
+    rewrite = run_input.get("mode") == "rewrite" or bool(revise)
+    pivot = (state["facts"]["ctx"].get("scenario_state") or {}).get("pivot_text")
+    task = ("현재 섹션 내용을 하나씩 검토해 수정 요청을 반영한 **섹션 전체 본문**을 다시 작성하라. 근거와 맞지 않거나 "
+            "근거 없이 단정한 문장은 고치거나 빼고, 유지할 내용은 다시 포함하라. 같은 내용을 반복하지 마라."
+            if rewrite else "위 근거만으로 이 섹션에 추가할 본문을 작성하라.")
     user = (f"[섹션] {SECTION_TITLE.get(section, section)}\n[현재 섹션 내용]\n{current or '(비어 있음)'}\n"
             + (f"[지원자 수정 요청]\n{revise}\n" if revise else "")
-            + f"[근거 자료]\n{H.truncate_tokens(evidence, 3000) or '(없음)'}\n\n위 근거만으로 이 섹션에 추가할 본문을 작성하라.")
+            + (f"[팀장 요구사항 변경]\n{pivot}\n" if pivot else "")
+            + f"[근거 자료]\n{H.truncate_tokens(evidence, 3000) or '(없음)'}\n\n{task}")
     deadline = time.monotonic() + max(1.0, (H.ACTIVE_BUDGET_MS - state.get("active_execution_ms", 0)) / 1000)
     ai = H.with_retries(lambda: llm().invoke([SystemMessage(system), HumanMessage(H.mask_pii(user))]), deadline=deadline)
     um = getattr(ai, "usage_metadata", None) or {}
@@ -468,7 +536,10 @@ def draft_delegation(state: WorkState) -> dict:
     allowed = _allowed_numbers(state) | H.numbers_in(current)
     if not body or H.validate_output(body, allowed) or H.ungrounded_units(body, allowed):
         body, mode = section_draft(state, section), ("fallback" if mode == "live" else "fixture")
-    content = (current.rstrip() + "\n" if current.strip() else "") + body
+    run_input = ctx["run"]["input"] or {}
+    rewrite = run_input.get("mode") == "rewrite" or bool(run_input.get("revise_comment"))
+    # 수정 요청은 섹션 전체 재작성(확인 카드에서 변경 전/후 비교), 첫 초안만 기존 내용 뒤에 추가
+    content = body if rewrite else (current.rstrip() + "\n" if current.strip() else "") + body
     cits = [c for c in _dedupe(state.get("citations", [])) if c.get("document_id") not in ("rejoin_facts", "interview_notes")][:5]
     args = {"task_id": state["task_id"], "section": section, "base_version": art["version"], "content": content,
             "citations": [{"document_id": c["document_id"], "chunk_id": c.get("chunk_id"), "version": c.get("version", 1),
