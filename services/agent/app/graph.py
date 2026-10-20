@@ -318,7 +318,7 @@ def reason(state: WorkState) -> dict:
     msgs = state.get("llm_messages") or []
     if not msgs:
         ctx = state["facts"]["ctx"]
-        name = "assistant-v2" if state["kind"] == "ASSISTANT" else "colleague-v2"
+        name = "colleague-v2"
         system, _ = H.load_prompt(name)
         pack = H.build_context(system, ctx["public_brief"]["public_brief"], ctx["messages"], [],
                                ctx.get("delegation"), H.rule_summary)
@@ -539,8 +539,8 @@ def _allowed_numbers(state: WorkState) -> set[str]:
 
 @_timed
 def respond(state: WorkState) -> dict:
-    etype = "ASSISTANT_MESSAGE" if state["kind"] == "ASSISTANT" else "COLLEAGUE_MESSAGE"
-    content = state["answer"] if state["kind"] == "ASSISTANT" else H.to_chat_plain(state["answer"])
+    etype = "COLLEAGUE_MESSAGE"
+    content = H.to_chat_plain(state["answer"])
     content = _guard_unreleased_schedule(state, content)
     payload: dict[str, Any] = {"content": content, "citations": _dedupe(state.get("citations", []))[:8]}
     if state.get("facts", {}).get("corrected"):

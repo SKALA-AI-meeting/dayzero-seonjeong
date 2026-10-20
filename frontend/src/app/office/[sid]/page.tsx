@@ -32,10 +32,10 @@ export default function Office() {
   const [briefRequired, setBriefRequired] = useState(false);
   const [submitOpen, setSubmitOpen] = useState(false);
   const [channel, setChannel] = useState<Channel>("team");
-  const [workTab, setWorkTab] = useState<"doc" | "tasks" | "assistant">("doc");
+  const [workTab, setWorkTab] = useState<"doc" | "tasks">("doc");
   const [workOpen, setWorkOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [runs, setRuns] = useState<Record<string, RunView>>({}); // key: COLLEAGUE | ASSISTANT
+  const [runs, setRuns] = useState<Record<string, RunView>>({}); // key: COLLEAGUE
   const [conn, setConn] = useState<"open" | "reconnecting">("open");
   const [toast, setToast] = useState<string | null>(null);
   const [busyApproval, setBusyApproval] = useState(false);
@@ -92,11 +92,11 @@ export default function Office() {
         const pl = e.payload as Record<string, unknown>;
         if (e.type === "RUN_STARTED" && e.run_id) runKind.current[e.run_id] = String(pl.kind);
         const key = (e.run_id && runKind.current[e.run_id]) || "";
-        const setRun = (v: RunView) => { if (key === "COLLEAGUE" || key === "ASSISTANT") setRuns((r) => ({ ...r, [key]: v })); };
+        const setRun = (v: RunView) => { if (key === "COLLEAGUE") setRuns((r) => ({ ...r, [key]: v })); };
         if (e.type === "RUN_STARTED") setRun({ state: "running", text: COPY.investigating });
         else if (e.type === "TOOL_START") setRun({ state: "running", text: TOOL_TEXT[String(pl.display_name)] ?? COPY.investigating });
         else if (e.type === "TOOL_END") setRun({ state: "running", text: pl.outcome === "ok" ? "자료 확인 완료 · 답변 정리 중" : "일부 자료를 확인하지 못했어요 · 답변 정리 중" });
-        else if (e.type === "COLLEAGUE_MESSAGE" || e.type === "ASSISTANT_MESSAGE" || e.type === "DONE") setRun(null);
+        else if (e.type === "COLLEAGUE_MESSAGE" || e.type === "DONE") setRun(null);
         else if (e.type === "FAILED") setRun({ state: "failed", text: COPY.ai_failed, runId: e.run_id });
         else if (e.type === "SESSION_DONE") router.push(`/debrief/${sid}`);
         if (e.type === "DOCUMENTS_UPDATED" || e.type === "SYSTEM_NOTICE") loadDocs();
@@ -113,10 +113,10 @@ export default function Office() {
       setNavOpen(false);
     } catch (e) { setToast(errText(e, "자료를 열지 못했습니다")); }
   }
-  async function send(ch: "TEAM" | "ASSISTANT", content: string) {
+  async function send(content: string) {
     try {
-      await api(`/sessions/${sid}/messages`, { method: "POST", json: { client_message_id: uuid(), channel: ch, content } });
-      setRuns((r) => ({ ...r, [ch === "TEAM" ? "COLLEAGUE" : "ASSISTANT"]: { state: "running", text: ch === "TEAM" ? "요청을 전달했어요." : COPY.investigating } }));
+      await api(`/sessions/${sid}/messages`, { method: "POST", json: { client_message_id: uuid(), channel: "TEAM", content } });
+      setRuns((r) => ({ ...r, COLLEAGUE: { state: "running", text: "요청을 전달했어요." } }));
       scheduleRefresh();
       return true;
     } catch (e) { setToast(errText(e, "메시지를 보내지 못했습니다. 입력한 내용은 그대로 남아 있습니다.")); return false; }
@@ -145,7 +145,7 @@ export default function Office() {
     catch (e) { setToast(errText(e, "위임을 취소하지 못했습니다")); }
   }
   async function retryRun(rid: string) {
-    try { await api(`/runs/${rid}/retry`, { method: "POST", json: {} }); setRuns((r) => ({ ...r, COLLEAGUE: null, ASSISTANT: null })); }
+    try { await api(`/runs/${rid}/retry`, { method: "POST", json: {} }); setRuns((r) => ({ ...r, COLLEAGUE: null })); }
     catch (e) { setToast(errText(e, "재시도하지 못했습니다")); }
   }
 
@@ -154,7 +154,6 @@ export default function Office() {
   // 팀장 공지·시스템 알림은 '# 프로젝트-공지'에만, 팀 대화(이도현·나)는 '# 재참여-개선'에만 표시
   const noticeMsgs = useMemo(() => teamAll.filter((m) => m.actor === "MANAGER" || m.actor === "SYSTEM"), [teamAll]);
   const team = useMemo(() => teamAll.filter((m) => m.actor !== "MANAGER" && m.actor !== "SYSTEM"), [teamAll]);
-  const assistantMsgs = useMemo(() => messages.filter((m) => m.channel === "ASSISTANT"), [messages]);
   useEffect(() => { if (channel === "notice") setNoticeSeen(noticeMsgs.length); }, [channel, noticeMsgs.length]);
 
   if (fatal && !snap) return <main className="center-wrap"><div className="card center-card"><div className="alert error" role="alert"><Icon name="error" />{fatal}</div></div></main>;
@@ -175,7 +174,7 @@ export default function Office() {
     if (i < 0) return body;
     return <>{body.slice(0, i)}<mark>{body.slice(i, i + quote.length)}</mark>{body.slice(i + quote.length)}</>;
   };
-  const showWork = (tab: "doc" | "tasks" | "assistant") => { setWorkTab(tab); setWorkOpen(true); setNavOpen(false); };
+  const showWork = (tab: "doc" | "tasks") => { setWorkTab(tab); setWorkOpen(true); setNavOpen(false); };
   const ch = CHANNELS[channel];
   const avatarSm = { width: 28, height: 28, fontSize: 12 };
 
@@ -237,9 +236,6 @@ export default function Office() {
               </button>
             ))}
           </div>
-          <div className="ws-nav-foot">
-            <button className="btn btn-block" aria-pressed={workTab === "assistant"} onClick={() => showWork("assistant")}><Icon name="sparkle" />AI 어시스턴트 열기</button>
-          </div>
         </nav>
 
         <main className="pane messenger" id="main-chat" aria-label={`# ${ch.name} 채널`}>
@@ -254,7 +250,6 @@ export default function Office() {
               <span className="avatar colleague" aria-hidden="true" style={avatarSm}>이</span>
               <span className="avatar me" aria-hidden="true" style={avatarSm}>나</span>
             </span>
-            <button className="btn btn-sm hide-md" onClick={() => showWork("assistant")}><Icon name="sparkle" />AI 어시스턴트</button>
           </div>
           {channel === "team" && noticeUnread > 0 && (
             <div className="sys-row" role="status"><div><Icon name="info" />새 공지 {noticeUnread}건: {noticeMsgs[noticeMsgs.length - 1]?.content.slice(0, 40)}…
@@ -273,7 +268,7 @@ export default function Office() {
             busy={busyFor("COLLEAGUE")}
             placeholder={COPY.composer}
             emptyText={channel === "notice" ? "아직 공지가 없습니다." : "팀장 공지는 # 프로젝트-공지 채널에서 확인할 수 있어요. 이도현 동료에게 말을 걸어 보세요."}
-            onSend={(t) => send("TEAM", t)} onRetry={retryRun}
+            onSend={(t) => send(t)} onRetry={retryRun}
             onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
             split={{ activeMessageId: activeSplitMessageId, confirmed: !!snap.split?.confirmed, onDecide: decideSplit }}
           />
@@ -292,11 +287,9 @@ export default function Office() {
                 기획안 {snap.approvals.length > 0 && <span className="badge warning">승인 {snap.approvals.length}</span>}</button>
               <button role="tab" id="tab-tasks" aria-controls="panel-tasks" className="tab" aria-selected={workTab === "tasks"} onClick={() => setWorkTab("tasks")}>
                 태스크 <span className="badge" aria-label={`미완료 ${openTasks}개`}>{openTasks}</span></button>
-              <button role="tab" id="tab-assistant" aria-controls="panel-assistant" className="tab" aria-selected={workTab === "assistant"} onClick={() => setWorkTab("assistant")}>
-                <Icon name="sparkle" />AI 어시스턴트</button>
             </div>
           </div>
-          <div className={`work-body ${workTab === "assistant" ? "assistant-body" : ""}`}>
+          <div className="work-body">
             <div id="panel-doc" role="tabpanel" aria-labelledby="tab-doc" hidden={workTab !== "doc"}>
               {snap.approvals.length > 0 && (
                 <div style={{ marginBottom: 16 }}>
@@ -312,19 +305,6 @@ export default function Office() {
               <TaskBoard tasks={snap.tasks} readOnly={submitted} onMove={moveTask} onReview={review} onRevoke={revoke}
                 workingTaskIds={new Set(snap.active_runs.filter((r) => r.kind === "DELEGATED" && ["QUEUED", "RUNNING"].includes(r.status) && r.task_id).map((r) => r.task_id!))} />
             </div>
-            {workTab === "assistant" && (
-              <div id="panel-assistant" role="tabpanel" aria-labelledby="tab-assistant" className="messenger" style={{ flex: 1, minHeight: 0 }}>
-                <div className="row" style={{ padding: "12px 20px 0" }}><span className="badge">읽기 전용</span><span className="help" style={{ marginTop: 0, flex: 1 }}>{COPY.assistant_desc}</span></div>
-                <Messenger
-                  messages={assistantMsgs} run={runs.ASSISTANT ?? null} canWrite={!submitted}
-                  readOnlyNote="제출된 세션입니다." busy={busyFor("ASSISTANT")} composerId="assistant-composer"
-                  placeholder="질문, 자료 요약, 비교 분석, 초안 작성을 요청하세요" emptyText="회사 자료를 근거로 답하고 참조 문서명을 알려 드립니다."
-                  quickPrompts={["재참여율 정의 찾기", "운영 정책 요약하기", "지난주 회의록 요약하기"]}
-                  onSend={(t) => send("ASSISTANT", t)} onRetry={retryRun}
-                  onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
-                />
-              </div>
-            )}
           </div>
         </aside>
       </div>

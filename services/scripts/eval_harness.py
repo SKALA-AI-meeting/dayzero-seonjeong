@@ -21,7 +21,7 @@ S = settings()
 
 
 def h_ins() -> dict:
-    names = ["colleague-v2", "assistant-v2", "section-writer-v1", "summary-v1", "report-v1"]
+    names = ["colleague-v2", "section-writer-v1", "summary-v1", "report-v1"]
     hashes = {n: H.load_prompt(n)[1] for n in names}
     H.load_prompt.cache_clear()
     stable = all(H.load_prompt(n)[1] == h for n, h in hashes.items())
@@ -30,10 +30,10 @@ def h_ins() -> dict:
     colleague = (PROMPTS_DIR / "colleague-v2.md").read_text()
     forbids = all(w in colleague for w in ("평가", "점수", "누설") ) or ("평가 의도" in colleague and "점수" in colleague)
     from gateway.app.internal.routes import READ_TOOLS, WRITE_TOOLS
-    assistant_no_write = not (READ_TOOLS & WRITE_TOOLS)
-    return {"pass": stable and no_inline and forbids and assistant_no_write,
+    toolsets_disjoint = not (READ_TOOLS & WRITE_TOOLS)
+    return {"pass": stable and no_inline and forbids and toolsets_disjoint,
             "detail": {"prompt_hashes": hashes, "hash_stable": stable, "no_inline_system_prompt": no_inline,
-                       "forbidden_rules_in_prompt": forbids, "assistant_read_only_toolset": assistant_no_write}}
+                       "forbidden_rules_in_prompt": forbids, "read_write_toolsets_disjoint": toolsets_disjoint}}
 
 
 def h_tool() -> dict:

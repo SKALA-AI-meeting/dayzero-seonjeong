@@ -56,7 +56,7 @@ export function Modal({ open, title, description, size = "md", onClose, footer, 
 
 /** Drawer (§4.10): 기본은 modal overlay. modal=false면 배경을 막지 않는 참조 패널(다른 영역과 동시 사용). */
 export function Drawer({ open, title, badge, kind = "doc", modal = true, onClose, children, footer }: {
-  open: boolean; title: string; badge?: React.ReactNode; kind?: "doc" | "assistant" | "side";
+  open: boolean; title: string; badge?: React.ReactNode; kind?: "doc" | "side";
   modal?: boolean; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode;
 }) {
   const ref = useFocusTrap(open && modal, onClose);

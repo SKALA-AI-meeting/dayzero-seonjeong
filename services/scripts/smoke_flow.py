@@ -72,8 +72,6 @@ def main() -> int:
 
     r, m = say("모임 규모별 재참여율 지표를 확인해 주실 수 있을까요?")
     check("조사 요청 → 동료 근거 응답", r.status_code == 202 and len(m["citations"]) > 0, m["content"][:120])
-    r, m = say("모아런 운영 정책을 요약해 주세요", "ASSISTANT")
-    check("AI 어시스턴트 응답(문서 근거)", r.status_code == 202 and m["actor"] == "ASSISTANT", m["content"][:80])
 
     check("00:10 업무 분담 이벤트", "T-SPLIT" in advance("T-SPLIT"))
     s = snap()

@@ -33,7 +33,7 @@ class StartIn(Strict):
 
 class MessageIn(Strict):
     client_message_id: str = Field(min_length=8, max_length=64)
-    channel: Literal["TEAM", "ASSISTANT"]
+    channel: Literal["TEAM"]
     content: str = Field(min_length=1, max_length=4000)
 
 
@@ -122,15 +122,15 @@ def post_message(sid: str, body: MessageIn, p: Principal = Depends(candidate)):
             return {"message_id": str(dup["id"]), "run_id": str(run["id"]) if run else None}
         busy = one(c, """SELECT id FROM runs WHERE session_id=%s AND kind=%s
                           AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL') LIMIT 1""",
-                   (sid, "ASSISTANT" if body.channel == "ASSISTANT" else "COLLEAGUE"))
+                   (sid, "COLLEAGUE"))
         if busy:
             raise ApiError(409, "RUN_BUSY", "동료가 다른 요청을 처리 중입니다. 완료 또는 승인 결정 후 다시 보내 주세요")
         m = insert_message(c, sid, body.channel, "CANDIDATE", body.content, client_message_id=body.client_message_id)
         seq = record_action(c, sid, "CANDIDATE", "MESSAGE_SENT", str(m["id"]), {"channel": body.channel})
-        kind = "ASSISTANT" if body.channel == "ASSISTANT" else "COLLEAGUE"
+        kind = "COLLEAGUE"
         run = create_run(c, sid, kind, source_message_id=str(m["id"]),
                          input_={"message_id": str(m["id"]), "content": body.content, "channel": body.channel},
-                         prompt_version="assistant-v2" if kind == "ASSISTANT" else "colleague-v2")
+                         prompt_version="colleague-v2")
         c.execute("UPDATE messages SET source_run_id=%s WHERE id=%s", (run["id"], m["id"]))
         emit(c, sid, "CANDIDATE_MESSAGE", {"message_id": str(m["id"]), "channel": body.channel,
                                            "content": body.content}, run_id=str(run["id"]))

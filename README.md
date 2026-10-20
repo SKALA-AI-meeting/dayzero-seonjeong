@@ -99,7 +99,7 @@ docker compose up -d
 
 ## 향후 고도화
 
-여러 회사에 맞는 시험을 만드는 기능(기업 요구사항 입력 → 맞춤 시나리오 생성·검증·배포)은 [docs/ROADMAP_MULTI_COMPANY.md](docs/ROADMAP_MULTI_COMPANY.md)에 정리했습니다(P1 이후, 미구현).
+여러 회사에 맞는 시험을 만드는 기능(기업 요구사항 입력 → 맞춤 시나리오 생성·검증·배포)은 [docs/archive/ROADMAP_MULTI_COMPANY.md](docs/archive/ROADMAP_MULTI_COMPANY.md)에 정리했습니다(P1 이후, 미구현).
 
 ## 검증 상태
 

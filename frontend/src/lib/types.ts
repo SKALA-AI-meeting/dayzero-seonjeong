@@ -2,7 +2,7 @@ export type Citation = { document_id: string; chunk_id?: string | null; version?
 export type Owner = "CANDIDATE" | "COLLEAGUE" | "JOINT";
 export type SplitProposal = { assignments: Record<string, Owner>; adjustments_used: number; max_adjustments: number };
 export type Message = {
-  id: string; channel: "TEAM" | "ASSISTANT"; actor: string; content: string; citations: Citation[];
+  id: string; channel: "TEAM"; actor: string; content: string; citations: Citation[];
   meta: { kind?: string; event_id?: string; split_proposal?: SplitProposal; limited?: boolean };
   source_run_id: string | null; created_at: string;
 };
@@ -39,7 +39,6 @@ export const ACTOR: Record<string, { name: string; initial: string; badge?: [str
   MANAGER: { name: "한서윤", initial: "한", badge: ["팀장", ""], avatar: "" },
   COLLEAGUE: { name: "이도현", initial: "이", badge: ["AI 동료", "info"], avatar: "colleague" },
   CANDIDATE: { name: "나", initial: "나", avatar: "me" },
-  ASSISTANT: { name: "AI 어시스턴트", initial: "AI", badge: ["읽기 전용", ""], avatar: "assistant" },
   SYSTEM: { name: "알림", initial: "!", avatar: "" },
 };
 export const OWNER_LABEL: Record<Owner, string> = { CANDIDATE: "나", COLLEAGUE: "이도현 · AI 동료", JOINT: "공동" };
@@ -54,7 +53,6 @@ export const CHANNELS = {
 export const COPY = {
   brief_title: "루프랩 프로덕트팀에 합류했습니다",
   composer: "이도현 동료에게 조사나 업무를 요청하세요",
-  assistant_desc: "자료를 찾고 내용을 이해하도록 돕습니다. 기획안이나 태스크를 직접 변경하지 않습니다.",
   saving: "저장 중…", saved: "저장됨", save_failed: "저장하지 못했습니다. 작성한 내용은 이 브라우저에 남아 있습니다.",
   reconnecting: "연결을 복구하고 있습니다. 저장된 작업은 유지됩니다.",
   investigating: "자료를 확인하고 있어요.", approval_title: "문서 변경 승인이 필요합니다",
