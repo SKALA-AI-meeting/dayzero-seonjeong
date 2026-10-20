@@ -40,6 +40,7 @@ export default function Office() {
   const closed = useRef(false); // 종료 후에는 재조회하지 않는다(지원자 재열람 차단 403)
 
   const refresh = useCallback(async () => {
+    if (closed.current) return null;
     try {
       const s = await api<Snapshot>(`/sessions/${sid}`);
       setSnap(s);
@@ -267,8 +268,10 @@ export default function Office() {
         </div>
       </Modal>
 
-      {endOpen && <EndDialog sid={sid} onClose={() => setEndOpen(false)} onDone={() => { closed.current = true; router.push(`/debrief/${sid}`); }}
-        onError={(m) => { setToast(m); scheduleRefresh(); }} />}
+      {endOpen && <EndDialog sid={sid} onClose={() => setEndOpen(false)}
+        onStart={() => { closed.current = true; if (refreshTimer.current) clearTimeout(refreshTimer.current); }}
+        onDone={() => router.push(`/debrief/${sid}`)}
+        onError={(m) => { closed.current = false; setToast(m); scheduleRefresh(); }} />}
 
       {toast && (
         <div role="alert" className="alert warning" style={{ position: "fixed", top: 64, right: 16, width: 360, maxWidth: "calc(100vw - 32px)", zIndex: 100, boxShadow: "var(--shadow-sm)" }}>
@@ -280,11 +283,14 @@ export default function Office() {
   );
 }
 
-function EndDialog({ sid, onClose, onDone, onError }: { sid: string; onClose: () => void; onDone: () => void; onError: (m: string) => void }) {
+function EndDialog({ sid, onClose, onStart, onDone, onError }: {
+  sid: string; onClose: () => void; onStart: () => void; onDone: () => void; onError: (m: string) => void;
+}) {
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   async function end() {
     setBusy(true);
+    onStart(); // 종료 요청 전에 재조회를 멈춘다(종료 직후 재조회는 403)
     try {
       await api(`/sessions/${sid}/submit`, { method: "POST", json: { summary: "" } });
       onDone();
