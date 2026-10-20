@@ -19,7 +19,7 @@ from shared.mcp_common import READ, capability_from, error, result
 
 mcp = MCPServer(name="rag-mcp", version="0.1.0",
                 instructions="루프랩 모아런 과제의 회사 자료 5개를 벡터 검색하고 원문을 Resource로 제공한다. 읽기 전용.")
-SCORE_THRESHOLD = 0.25  # fixed against data/commerce-cart-v1/retrieval_eval.json
+SCORE_THRESHOLD = 0.25  # fixed against data/moarun-rejoin-v1/retrieval_eval.json
 _state: dict = {}
 
 

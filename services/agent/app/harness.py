@@ -27,7 +27,7 @@ MAX_SAME_TOOL = 3
 ACTIVE_BUDGET_MS = 120_000
 RETRY_DELAYS = (1.0, 2.0)  # 최초 + 2회 재시도
 RETRYABLE = ("429", "503", "timeout", "rate limit", "overloaded", "temporarily")
-SAFE_FALLBACK = "확인할 자료 범위를 선택해 주세요. 예: 기간(baseline/current), 기기, 방문 유형, 장바구니 금액, 고객 문의 태그."
+SAFE_FALLBACK = "어떤 자료를 기준으로 볼지 정해 주시면 확인해 볼게요. 예: 지표 현황(모임 규모별 재참여율), 운영 정책, 회의록, 사용자 인터뷰(공유 후)."
 
 
 # ---- Instructions -----------------------------------------------------------

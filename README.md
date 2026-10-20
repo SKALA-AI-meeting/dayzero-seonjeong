@@ -1,6 +1,8 @@
-# Day Zero 개인 MVP — 모아마켓 장바구니 이탈 협업 과제
+# Day Zero 개인 MVP — 루프랩 모아런 재참여율 개선 과제
 
-지원자가 AI 동료(이도현)와 함께 가상 커머스의 장바구니 이탈 문제를 조사하고 개선 기획안을 제출합니다. 기업 담당자는 점수가 아닌 행동 근거 리포트를 확인합니다. 명세는 [docs/](docs/)(PRD·ARCHITECTURE·AGENT_GUIDE·SCENARIO_DATA)를 따릅니다.
+지원자가 가상 리모트 스타트업 루프랩의 프로덕트팀에 합류해, AI 동료 이도현과 2시간 동안 "모아런 재참여율 개선 신규 기능 기획안"을 만듭니다. 업무 분담·도움 요청·자료 지연·요구사항 변경·동료 오류 같은 상황이 모든 지원자에게 같은 시각에 일어나고, 기업 담당자는 점수가 아닌 5개 영역(책임감·존중소통·협력·유연성·AI 활용)의 행동 근거 리포트를 확인합니다.
+
+시험 내용의 최우선 기준은 [DAYZERO_EXAM_SCENARIO.md](DAYZERO_EXAM_SCENARIO.md)이고, 기술 계약은 [docs/](docs/)(PRD·ARCHITECTURE·AGENT_GUIDE·SCENARIO_DATA)를 따릅니다.
 
 앱 루트는 이 저장소입니다(`dayzero-seonjeong`). 현재 상태와 검증 결과는 [evidence/](evidence/)에 있습니다.
 
@@ -27,7 +29,7 @@ docker run -d --name dayzero-db -e POSTGRES_USER=dayzero -e POSTGRES_PASSWORD=lo
 cd services && uv sync
 uv run alembic upgrade head
 uv run python -m scripts.seed
-uv run python -m scripts.index_documents --scenario commerce-cart-v1   # 임베딩 모델 다운로드 + 색인
+uv run python -m scripts.index_documents --scenario moarun-rejoin-v1   # 임베딩 모델 다운로드 + 색인
 cd ../frontend && npm ci
 
 # 1) 서비스 실행 (각각 별도 터미널, services/ 에서)
@@ -48,6 +50,8 @@ uv run python -m scripts.smoke_flow --mode fixture   # agent 모드와 일치시
 
 관리자 로그인: `http://localhost:3100/admin/login`, 이메일 `admin@dayzero.local`, 비밀번호는 `.env`의 `SEED_ADMIN_PASSWORD`. 초대 링크를 만든 뒤 다른 브라우저(또는 시크릿 창)에서 열면 지원자로 입장합니다.
 
+시험은 실제 2시간 기준으로 진행되며 이벤트(00:10 업무 분담 ~ 02:00 자동 제출)는 서버 시계로 발생합니다. 시연할 때는 관리자 세션 목록의 "시연: 이벤트로 이동" 메뉴로 다음 이벤트 시각으로 건너뛸 수 있습니다(`APP_ENV=development`에서만 표시, 지원자 화면에는 노출되지 않음).
+
 Docker Compose 실행(`compose.yaml`)은 아직 작성 전입니다(M5).
 
 ## 근거와 구현 가정
@@ -55,5 +59,6 @@ Docker Compose 실행(`compose.yaml`)은 아직 작성 전입니다(M5).
 - 근거 S1~S5와 구현 가정 A1~A7은 [docs/PRD.md](docs/PRD.md) §2~3을 그대로 따릅니다. 공식 교안 평가표는 인쇄 73쪽(PDF 74페이지) 표 6-14에서 확인한 것이며, 배점 확인과 이 앱의 평가 통과는 별개입니다.
 - 교안 53쪽 레퍼런스 스택(Vue 3/Spring Boot 3)과 달리 Next.js/FastAPI를 사용합니다(A2, 개인 구현 가정).
 - 웹 실시간 전송은 REST 202 + SSE(A3), 모델은 `gpt-4o-mini` 고정(A5), 임베딩은 로컬 384차원 모델(A6).
-- 위임 run이 끝나면(승인 반영 또는 거절) gateway가 동료 태스크를 REVIEW로 전환합니다. 동료가 `update_task_status`로 직접 바꾸려면 변경별 승인이 하나 더 필요해 시연 흐름이 길어지므로 내린 구현 결정입니다. DONE은 지원자 검토로만 결정됩니다.
+- 업무 분담이 확정되면 동료 담당 섹션마다 위임(delegation)과 Agent run이 생깁니다. 동료는 MCP로 자료를 조회해 초안을 만들고, 문서에 넣기 전에 확인 카드(LangGraph interrupt)로 승인을 받습니다. run이 끝나면 gateway가 동료 태스크를 REVIEW로 전환합니다(`update_task_status`까지 승인을 받으면 흐름이 길어지기 때문에 내린 구현 결정). DONE은 지원자 검토로만 결정됩니다.
+- 01:30 동료 오류(유료 멤버십 제안)는 고정 메시지로 발생합니다. 지원자가 정책·재검토를 언급하면 동료가 운영 정책 문서를 다시 검색해 정정하고, 지적이 없으면 스스로 고치지 않습니다.
 - 임베딩 입력은 "문서 제목: 청크"이고, 저장·인용 본문은 원문 그대로입니다(SCENARIO_DATA §4의 모델용 표현과 원문 인용 분리).

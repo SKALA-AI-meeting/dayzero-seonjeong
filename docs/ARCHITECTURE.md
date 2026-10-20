@@ -1,6 +1,6 @@
-# Day Zero 개인 MVP — 아키텍처 및 계약 v1.2
+# Day Zero 개인 MVP — 아키텍처 및 계약 v1.3
 
-기준: PRD v1.2, 2026-10-20 16:30 KST. 공식 교안 표 5-4~6/6-3/6-13/6-14 및 사용자 디자인·포트 지정 반영. 아래 이름·타입·오류 코드는 구현 계약이다. 현재는 설계 문서이며 파일/명령의 구현 완료를 뜻하지 않는다.
+기준: PRD v1.3, 2026-10-20 16:30 KST. v1.3은 시나리오 교체(`DAYZERO_EXAM_SCENARIO.md`, moarun-rejoin-v1)에 따라 시나리오에 묶인 식별자(지표 테이블·MCP 도구·섹션·이벤트·분담 API)만 바꿨으며 서비스 경계·인증·SSE·승인·Harness 계약은 그대로다. 공식 교안 표 5-4~6/6-3/6-13/6-14 및 사용자 디자인·포트 지정 반영. 아래 이름·타입·오류 코드는 구현 계약이다. 현재는 설계 문서이며 파일/명령의 구현 완료를 뜻하지 않는다.
 
 ## 1. 배치와 책임
 
@@ -24,7 +24,7 @@ web은 컨테이너 내부도 3100에 bind하고 Compose는 `3100:3100`으로 �
 
 교안 53쪽 레퍼런스는 Vue 3/Vite, Spring Boot 3, FastAPI·LangGraph 1.x·LangChain 1.x, FastMCP 4.1/mcp 2.x, Chroma 또는 pgvector, PostgreSQL 16이다. 이 패키지는 UI/업무 서버 프레임워크를 마감용 개인 구현 가정으로 바꾸지만 계층 책임은 그대로 유지한다. 프레임워크 선택까지 공식 허용받았다는 의미는 아니다. Agent의 ‘DB 직접 쓰기 금지’는 업무 데이터에 적용하고 checkpointer의 전용 schema 저장만 허용한다(교안 64쪽은 agent checkpointer의 DB 접근을 명시).
 
-P0 오프라인 색인 경로: `6개 문서 → 모델 토큰 기준 청크 → local embedding → pgvector`. 온라인 경로: `질문 → 같은 모델의 embedding → cosine top-k → 출처 청크 → 필요시 Resource 원문 열람`. 로컬 모델은 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`(384차원)를 구현 가정으로 선택한다. CPU 사용, 정규화 벡터, 모델 revision을 색인 metadata에 고정한다. LLM API 모델 제한과 별도인 로컬 임베딩이며 추가 유료 API를 만들지 않는다. 첫 다운로드/색인은 질문 처리 전에 완료하고 검색 중 자동 다운로드하지 않는다.
+P0 오프라인 색인 경로: `회사 자료 5개 → 모델 토큰 기준 청크 → local embedding → pgvector`. 온라인 경로: `질문 → 같은 모델의 embedding → cosine top-k → 출처 청크 → 필요시 Resource 원문 열람`. 로컬 모델은 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`(384차원)를 구현 가정으로 선택한다. CPU 사용, 정규화 벡터, 모델 revision을 색인 metadata에 고정한다. LLM API 모델 제한과 별도인 로컬 임베딩이며 추가 유료 API를 만들지 않는다. 첫 다운로드/색인은 질문 처리 전에 완료하고 검색 중 자동 다운로드하지 않는다.
 
 ## 2. 공통 타입/식별자
 
@@ -68,16 +68,16 @@ type EvidenceRef = {
 | runs | id UUID PK, session_id FK, thread_id text unique, kind COLLEAGUE/ASSISTANT/DELEGATED/REPORT, status, source_message_id nullable, task_id nullable, input jsonb, result jsonb nullable, policy_version text, prompt_version text, trace_id text, trace_url nullable, token_usage jsonb, estimated_cost nullable, pricing_version nullable, error_code nullable, created_at, updated_at |
 | approvals | id UUID PK, session_id FK, run_id FK, interrupt_id text, tool_name text, args jsonb, args_hash text, base_versions jsonb, delegation_id nullable, status PENDING/APPROVED/REJECTED/EXPIRED/APPLIED, expires_at, decided_at nullable, decision_actor_id nullable. unique(run_id,interrupt_id) |
 | mutation_receipts | operation_id text PK, session_id FK, approval_id FK unique, result jsonb, applied_at |
-| documents | id text PK, scenario_id FK, version int, title, body text, visibility PUBLIC, checksum text |
+| documents | id text PK, scenario_id FK, version int, title, body text, visibility PUBLIC, checksum text, available_after_min int(시험 시계 기준 공개 시각, 인터뷰 65) |
 | document_chunks | id text PK, document_id FK, document_version int, ordinal int, body text, keywords jsonb, embedding vector(384), embedding_model text, embedding_revision text, embedding_dimension int CHECK(embedding_dimension=384), index_version text. unique(document_id,document_version,ordinal,index_version) |
-| funnel_facts | scenario_id FK, dataset_version text, period text, device text, visitor text, cart_value text, cart_sessions int, checkout_sessions int, orders int. PK(scenario_id,dataset_version,period,device,visitor,cart_value), CHECK(0≤orders≤checkout_sessions≤cart_sessions) |
-| support_cases | id text PK, scenario_id FK, device text, visitor text, tags jsonb, quote text |
-| scenario_events | id text PK, policy_version, predicate_key, payload jsonb, priority int |
-| event_occurrences | id UUID PK, session_id FK, event_id FK, trigger_action_seq bigint, facts jsonb, response_message_id nullable, created_at. unique(session_id,event_id) |
+| rejoin_facts | scenario_id FK, dataset_version text, group_size small/medium/large, first_time_participants int, rejoined_within_30d int. PK(scenario_id,dataset_version,group_size), CHECK(0≤rejoined≤first_time) |
+| interview_notes | id text PK, scenario_id FK, group_size text, tags jsonb, quote text |
+| scenario_events | id text PK, policy_version, predicate_key(이벤트 kind), payload jsonb(고정 메시지·관찰 영역), priority int, at_min int(00:00 기준 발생 분) |
+| event_occurrences | id UUID PK, session_id FK, event_id FK, trigger_action_seq bigint, facts jsonb, response_message_id nullable, occurred_at_min numeric, created_at. unique(session_id,event_id) |
 | actions | id UUID PK, session_id FK, seq bigint, actor, kind text, entity_id text nullable, payload jsonb, created_at. unique(session_id,seq) |
 | tool_calls | id UUID PK, session_id FK, run_id FK, tool_name, safe_args jsonb, result_summary jsonb, citations jsonb, help_id text, policy_version, outcome, duration_ms, created_at |
 | reports | id UUID PK, session_id unique FK, status PENDING/RUNNING/READY/FAILED, version int, source_snapshot jsonb, body jsonb nullable, attempts int default 0, error_code nullable |
-| jobs | id UUID PK, session_id FK, run_id nullable unique FK, dedupe_key text unique, kind AGENT/REPORT/POLICY_CHECK, input jsonb, status QUEUED/LEASED/DONE/FAILED, attempt int, available_at, lease_until nullable, last_error nullable |
+| jobs | id UUID PK, session_id FK, run_id nullable unique FK, dedupe_key text unique, kind AGENT/REPORT, input jsonb, status QUEUED/LEASED/DONE/FAILED, attempt int, available_at, lease_until nullable, last_error nullable |
 | stream_events | id UUID PK, session_id FK, seq bigint, run_id nullable, type text, public_payload jsonb, admin_payload jsonb nullable, created_at. unique(session_id,seq) |
 
 LangGraph checkpoint는 공식 PostgreSQL saver의 전용 `checkpoints` schema를 사용한다. 독자적인 JSON 저장만으로 interrupt 재개를 흉내 내지 않는다. 인용 보존을 위해 messages/revisions는 immutable로 관리한다. pgvector extension과 vector(384) 열은 P0 migration에 포함한다. 데이터가 작으므로 ANN 인덱스 튜닝은 제외하고 exact cosine search를 사용한다. sessions↔participants와 tasks↔delegations의 순환 FK는 지연 검사(DEFERRABLE INITIALLY DEFERRED)로 같은 transaction에서 생성하거나 한쪽을 nullable로 두고 commit 전 연결한다. seed는 FK 제약을 끄지 않는다.
@@ -110,7 +110,8 @@ JWT claim: `sub`, `role`, `company_id`, candidate의 `session_id`, `exp`, `jti`.
 | GET `/sessions/{sid}/documents` | 없음 | 200 `{items:[{id,title,version}]}` / 소유자 |
 | GET `/sessions/{sid}/documents/{docId}` | 없음 | 200 `{id,title,version,body}` + 열람 action / 소유자 |
 | PATCH `/sessions/{sid}/artifact` | `{base_version,section,content,source_refs:EvidenceRef[]}` | 200 `{artifact}` / CANDIDATE 직접 편집 |
-| POST `/sessions/{sid}/delegations` | `{source_message_id,title,target_section:'evidence',allowed_tools,filters}` + Idempotency-Key | 201 `{delegation,task,run_id}`; 확인 버튼으로만 호출 / CANDIDATE |
+| POST `/sessions/{sid}/split` | `{decision:'ACCEPT'|'ADJUST',assignments:{section:'CANDIDATE'|'COLLEAGUE'|'JOINT'},comment}` | 200 `{split}`; ADJUST 최대 3회, ACCEPT는 마지막 합의안으로만. 확정 시 태스크 담당 반영, 동료 담당 섹션마다 delegation+DELEGATED run 생성 / CANDIDATE |
+| POST `/sessions/{sid}/demo/advance` | `{to_event}` | 200 `{fired,elapsed_min}`; 시험 시계 offset 이동 후 도래 이벤트 발생. APP_ENV=development 전용, 지원자 화면 비노출 / ADMIN |
 | DELETE `/sessions/{sid}/delegations/{did}` | 없음 | 204, 미실행 승인 폐기·run 취소 / CANDIDATE |
 | PATCH `/sessions/{sid}/tasks/{tid}` | `{base_version,status}` | 200 `{task}` / 자기 담당 CANDIDATE |
 | POST `/sessions/{sid}/tasks/{tid}/review` | `{decision:'ACCEPT'|'REVISE'|'REJECT',comment,source_refs:EvidenceRef[]}` | 200 `{task}` / CANDIDATE |
@@ -175,10 +176,10 @@ P0는 완성 메시지만 전송하고 TOKEN 단위 전송은 P1. SSE는 권한�
 | 도구 | 모델 입력 JSON | data 출력 | 제약 |
 |---|---|---|---|
 | `get_session_context` | `{}` | `{public_brief,phase,tasks,artifact_version}` | actor에 맞는 공개 DTO만 |
-| `get_funnel_metrics` | `{period:'baseline'|'current',dimension:'overall'|'device'|'visitor'|'cart_value',filters:{device?,visitor?,cart_value?}}` | `{rows:[{segment,cart_sessions,checkout_sessions,orders,abandonment_rate,checkout_abandonment_rate}],unit,source_version}` | filter 값은 seed enum, 임의 SQL 금지 |
-| `get_support_cases` | `{tags:string[],limit:int}` | `{items:[{id,tags,quote}],sampling_note}` | tags 최대 3, limit 1~5. 전체 원인 비중 추정 금지 |
+| `get_rejoin_metrics` | `{dimension:'overall'|'group_size',filters:{group_size?:'small'|'medium'|'large'}}` | `{rows:[{segment,label,first_time_participants,rejoined_within_30d,rejoin_rate}],unit,monthly_active_users,source_version}` | filter 값은 seed enum, 임의 SQL 금지 |
+| `get_interview_notes` | `{tags:string[],limit:int}` | `{items:[{id,group_size,tags,quote}],sampling_note}` | tags 최대 3, limit 1~8. 01:05 공개 전 NOT_FOUND. 의견 비중 일반화 금지 |
 | `update_task_status` | `{task_id,base_version,status:'IN_PROGRESS'|'REVIEW'}` | `{task}` | 동료 담당/위임 task만, 변경별 승인 |
-| `patch_artifact_section` | `{task_id,section:'evidence',base_version,content,citations:Citation[]}` | `{artifact_id,version,revision_id}` | 위임 evidence만, 승인별 args 고정 |
+| `patch_artifact_section` | `{task_id,section,base_version,content,citations:Citation[]}` | `{artifact_id,version,revision_id}` | 분담 확정된 동료 담당 섹션(delegation.section_allowlist)만, 승인별 args 고정 |
 
 business-mcp는 각 도구를 gateway `/internal/v1/mcp/{tool_name}`로 전달한다. timeout 5초. 조회 실패 재시도 최대 2회. 변경은 operation_id가 있을 때만 동일 요청 재시도 가능하다. 승인된 변경 tool 호출에는 모델 입력 외에 server context `{approval_id,operation_id,args_hash,capability}`가 붙는다. gateway는 approval 상태·hash·범위·기준 버전을 다시 검사하고 receipt를 transaction에 저장한다. task_status=REVIEW가 Agent 작업 완료이며 최종 DONE 결정은 지원자 review API만 할 수 있다.
 
@@ -268,19 +269,21 @@ report job은 source_snapshot에 message/revision/action/tool/event ID를 고정
 
 ```json
 {
-  "schema_version":"1.0","generation_mode":"LLM_WITH_RULES",
-  "policy_version":"help-v1","scenario_version":1,
-  "opportunities":[{"event_id":"E-CONSTRAINT","status":"TRIGGERED","trigger_action_seq":8}],
-  "behavior":[{"dimension":"AI_UTILIZATION","status":"OBSERVED","facts":[{"text":"조사 결과를 수정 요청함","refs":[]}],"interpretation":{"text":"검증 시도를 했을 가능성","label":"INFERENCE"},"limits":"자료 대조의 깊이는 확인되지 않음"}],
-  "work_approach":[{"dimension":"EVIDENCE_GATHERING","status":"OBSERVED","facts":[],"interpretation":null,"limits":""}],
-  "help_delivered":[{"help_id":"H2","tool_call_ids":[]}],
+  "schema_version":"2.0","generation_mode":"LLM_WITH_RULES",
+  "policy_version":"exam-v1","scenario_id":"moarun-rejoin-v1","submitted_by":"CANDIDATE",
+  "timeline":[{"event_id":"T-ERROR","at":"01:30","situation":"동료가 운영 정책과 충돌하는 유료 멤버십 기능을 제안함"}],
+  "areas":[{"dimension":"RESPECT_COMMUNICATION","label":"존중·소통","status":"OBSERVED",
+            "situations":[{"event_id":"T-ERROR","situation":"…","status":"OBSERVED","at":"01:30"}],
+            "facts":[{"text":"팀 채팅에 메시지: “운영 정책에 올해 유료 기능은…”","at":"01:31","refs":[{"kind":"message","id":"…","field":"content","start":0,"end":40,"quote":"…"}]}],
+            "interpretation":{"text":"정책 근거를 들어 오류를 전달했을 가능성","label":"INFERENCE"},"limits":"…"}],
+  "split_history":[{"kind":"SPLIT_CONFIRMED","assignments":{},"at":"00:12"}],
   "limitations":["단일 가상 과제에서 관찰한 행동이며 성격·채용 성과를 단정하지 않음"]
 }
 ```
 
-위 JSON은 필드 형식 예시다. 실제 OBSERVED 항목 facts는 유효 EvidenceRef 1개 이상이어야 한다. status는 OBSERVED/NO_OPPORTUNITY/INSUFFICIENT_EVIDENCE/NOT_USED. 도움 history는 허용 수준과 실제 제공 수준을 모두 보관한다.
+위 JSON은 필드 형식 예시다. 실제 OBSERVED 항목 facts는 유효 EvidenceRef 1개 이상이어야 한다. status는 OBSERVED/NO_OPPORTUNITY/INSUFFICIENT_EVIDENCE/NOT_USED. areas는 책임감·존중소통·협력·유연성·AI 활용 5개이며 각 facts에는 이벤트 이후 다음 이벤트 전까지의 실제 지원자 행동과 시각을 담는다. 점수·등급·순위·합불 필드는 없다.
 
-jobs claim은 `FOR UPDATE SKIP LOCKED`로 단일 lease(150초)를 부여한다. 만료 job은 worker가 checkpoint/receipt를 조회하고 재개한다. WAITING_APPROVAL는 job을 DONE으로 바꾸며 승인 API가 같은 run의 job을 QUEUED로 갱신하고 resume 입력을 저장한다. run_id unique job은 새 row를 중복 생성하지 않는다. POLICY_CHECK는 run_id 없이 session+trigger action의 dedupe_key로 등록하며 해당 session의 Graph 실행과 같은 직렬화 규칙을 적용한다. REPORT job도 전용 REPORT run을 만든다. 각 node의 활성 실행 시간을 checkpoint에 누적하고 승인 대기 시간을 빼서 총 120초 예산을 재개 후에도 유지한다. 프로세스 재시작 시 PENDING 승인은 만료 검사 후 UI에 복원하며 자동 승인하지 않는다. SSE 이벤트도 DB에서 복원한다.
+jobs claim은 `FOR UPDATE SKIP LOCKED`로 단일 lease(150초)를 부여한다. 만료 job은 worker가 checkpoint/receipt를 조회하고 재개한다. WAITING_APPROVAL는 job을 DONE으로 바꾸며 승인 API가 같은 run의 job을 QUEUED로 갱신하고 resume 입력을 저장한다. run_id unique job은 새 row를 중복 생성하지 않는다. 시나리오 이벤트는 job이 아니라 agent ticker가 2초마다 호출하는 내부 `POST /internal/v1/timeline/tick`에서 세션 row lock 아래 발생시킨다(세션당 이벤트 1회, 02:00 자동 제출 포함). REPORT job도 전용 REPORT run을 만든다. 각 node의 활성 실행 시간을 checkpoint에 누적하고 승인 대기 시간을 빼서 총 120초 예산을 재개 후에도 유지한다. 프로세스 재시작 시 PENDING 승인은 만료 검사 후 UI에 복원하며 자동 승인하지 않는다. SSE 이벤트도 DB에서 복원한다.
 
 ## 11. 품질 속성과 검증 연결
 
