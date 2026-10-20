@@ -1,141 +1,67 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Icon } from "@/components/Icon";
-import { Modal } from "@/components/Overlay";
 import { api, ApiError } from "@/lib/api";
-import { COPY, fmtTime, SECTIONS, type Artifact } from "@/lib/types";
+import { ARTIFACT_HINT, COPY, ERROR_COPY, type Artifact } from "@/lib/types";
 
-export type SaveState = "idle" | "dirty" | "saving" | "saved" | "conflict" | "failed";
-type Props = {
-  sessionId: string;
-  artifact: Artifact;
-  readOnly: boolean;
-  onSaved: (a: Artifact) => void;
-  reloadArtifact: () => Promise<Artifact | null>;
-  onSaveState: (s: { state: SaveState; savedAt: string | null }) => void;
-};
+/** 내 산출물 편집기(T1~T5). 자동 저장 없이 '저장'을 눌러야 저장된다 — 저장 1번이 1턴이다. */
+export function ArtifactEditor({ sessionId, artifacts, readOnly, onSaved }: {
+  sessionId: string; artifacts: Artifact[]; readOnly: boolean; onSaved: (a: Artifact) => void;
+}) {
+  const [active, setActive] = useState<string>(artifacts[0]?.key ?? "T1");
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  const [state, setState] = useState<Record<string, "saving" | "saved" | "failed" | "conflict">>({});
+  const [error, setError] = useState<string | null>(null);
+  const a = artifacts.find((x) => x.key === active) ?? artifacts[0];
 
-function SaveLabel({ st, at }: { st: SaveState; at?: string | null }) {
-  if (st === "saving") return <span className="row small" aria-live="polite"><span className="spin" aria-hidden="true" />{COPY.saving}</span>;
-  if (st === "saved") return <span className="row small" aria-live="polite" style={{ color: "#15803d" }}><Icon name="check" />{COPY.saved}{at ? ` · ${at}` : ""}</span>;
-  if (st === "dirty") return <span className="small muted">수정됨</span>;
-  if (st === "failed") return <span className="row small" style={{ color: "var(--color-error)" }}><Icon name="error" />저장하지 못했습니다</span>;
-  if (st === "conflict") return <span className="row small" style={{ color: "#b45309" }}><Icon name="warning" />충돌 확인 필요</span>;
-  return null;
-}
+  // 서버 본문(서윤 수정안 승인 포함)은 내가 고치는 중이 아닐 때(draft 없음) 그대로 보인다
+  if (!a) return null;
+  const value = draft[a.key] ?? a.body;
+  const dirty = draft[a.key] !== undefined && draft[a.key] !== a.body;
 
-/** 5섹션 기획안 (DESIGN_GUIDE §4.8, §6.10, §10.5). 성공 응답 후에만 '저장됨'. */
-export function ArtifactEditor({ sessionId, artifact, readOnly, onSaved, reloadArtifact, onSaveState }: Props) {
-  const [local, setLocal] = useState<Record<string, string>>(artifact.sections);
-  const [state, setState] = useState<Record<string, SaveState>>({});
-  const [savedAt, setSavedAt] = useState<Record<string, string>>({});
-  const [conflict, setConflict] = useState<{ section: string; remote: string } | null>(null);
-  const server = useRef(artifact);
-  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const dirty = useRef<Set<string>>(new Set());
-  const reqSeq = useRef<Record<string, number>>({});
-
-  useEffect(() => {
-    server.current = artifact;
-    setLocal((prev) => {
-      const next = { ...prev };
-      for (const s of SECTIONS) if (!dirty.current.has(s.id)) next[s.id] = artifact.sections[s.id] ?? "";
-      return next;
-    });
-  }, [artifact]);
-
-  useEffect(() => {
-    const vals = Object.values(state);
-    const agg: SaveState = vals.includes("conflict") ? "conflict" : vals.includes("failed") ? "failed" : vals.includes("saving") ? "saving"
-      : vals.includes("dirty") ? "dirty" : vals.includes("saved") ? "saved" : "idle";
-    const last = Object.values(savedAt).sort().pop() ?? null;
-    onSaveState({ state: agg, savedAt: last });
-  }, [state, savedAt, onSaveState]);
-
-  async function save(section: string, content: string, retried = false) {
-    const my = (reqSeq.current[section] = (reqSeq.current[section] ?? 0) + 1);
-    setState((s) => ({ ...s, [section]: "saving" }));
+  async function save() {
+    if (!a) return;
+    setState((s) => ({ ...s, [a.key]: "saving" })); setError(null);
     try {
-      const r = await api<{ artifact: Artifact }>(`/sessions/${sessionId}/artifact`, {
-        method: "PATCH", json: { base_version: server.current.version, section, content, source_refs: [] },
+      const r = await api<{ artifact: Artifact }>(`/sessions/${sessionId}/artifacts/${a.key}`, {
+        method: "PATCH", json: { base_version: a.version, body: value },
       });
-      server.current = r.artifact;
       onSaved(r.artifact);
-      if (reqSeq.current[section] !== my) return; // 오래된 응답이 최신 draft를 덮지 않게
-      dirty.current.delete(section);
-      setSavedAt((m) => ({ ...m, [section]: fmtTime(new Date().toISOString()) }));
-      setState((s) => ({ ...s, [section]: "saved" }));
+      setDraft((d) => { const n = { ...d }; delete n[a.key]; return n; });
+      setState((s) => ({ ...s, [a.key]: "saved" }));
     } catch (e) {
-      if (e instanceof ApiError && e.code === "VERSION_CONFLICT") {
-        const before = server.current.sections[section] ?? "";
-        const latest = await reloadArtifact();
-        if (latest) {
-          server.current = latest;
-          if (!retried && (latest.sections[section] ?? "") === before) return save(section, content, true); // 다른 섹션만 바뀜
-          setConflict({ section, remote: latest.sections[section] ?? "" });
-        }
-        setState((s) => ({ ...s, [section]: "conflict" }));
-      } else {
-        setState((s) => ({ ...s, [section]: "failed" }));
-      }
+      const conflict = e instanceof ApiError && e.code === "VERSION_CONFLICT";
+      setState((s) => ({ ...s, [a.key]: conflict ? "conflict" : "failed" }));
+      setError(e instanceof ApiError ? (ERROR_COPY[e.code] ?? e.message) : COPY.save_failed);
     }
   }
 
-  function onChange(section: string, value: string) {
-    setLocal((l) => ({ ...l, [section]: value }));
-    dirty.current.add(section);
-    setState((s) => ({ ...s, [section]: "dirty" }));
-    clearTimeout(timers.current[section]);
-    timers.current[section] = setTimeout(() => save(section, value), 800);
-  }
-
-  function resolve(keepMine: boolean) {
-    if (!conflict) return;
-    const { section } = conflict;
-    setConflict(null);
-    if (keepMine) save(section, local[section], true);
-    else {
-      dirty.current.delete(section);
-      setLocal((l) => ({ ...l, [section]: server.current.sections[section] ?? "" }));
-      setState((s) => ({ ...s, [section]: "idle" }));
-    }
-  }
-
+  const st = state[a.key];
   return (
-    <div>
-      {SECTIONS.map((s) => {
-        const st = state[s.id] ?? "idle";
-        const val = local[s.id] ?? "";
-        return (
-          <section key={s.id} className="section-card" id={`section-${s.id}`} aria-labelledby={`sec-title-${s.id}`}>
-            <div className="row"><h3 id={`sec-title-${s.id}`}>{s.title}</h3><span className="spacer" />{!val.trim() && <span className="badge">비어 있음</span>}</div>
-            <label htmlFor={`sec-${s.id}`} className="sr-only">{s.title}</label>
-            <textarea id={`sec-${s.id}`} className="textarea" value={val} readOnly={readOnly} placeholder={s.hint}
-              aria-describedby={`sec-foot-${s.id}`} onChange={(e) => onChange(s.id, e.target.value)} />
-            <div className="section-foot" id={`sec-foot-${s.id}`}>
-              <SaveLabel st={st} at={savedAt[s.id]} />
-              {st === "failed" && <button className="btn btn-sm" onClick={() => save(s.id, val)}>다시 시도</button>}
-              <span className="spacer" />
-              <span className="muted num">{val.length.toLocaleString()}자</span>
-            </div>
-            {st === "failed" && <p className="help">{COPY.save_failed}</p>}
-          </section>
-        );
-      })}
-      <Modal open={!!conflict} size="lg" title="다른 변경이 먼저 저장되었습니다"
-        description="내 입력과 최신 저장본을 모두 보존했습니다. 자동으로 덮어쓰지 않습니다." onClose={() => resolve(false)}
-        footer={<><button className="btn" onClick={() => resolve(false)}>최신 버전으로 다시 열기</button><button className="btn btn-primary" data-autofocus onClick={() => resolve(true)}>내 입력으로 저장</button></>}>
-        {conflict && (
-          <div className="stack">
-            <p className="strong">{SECTIONS.find((x) => x.id === conflict.section)?.title}</p>
-            <div className="diff">
-              <div><span className="small strong">최신 저장본</span><pre className="expanded">{conflict.remote || "(비어 있음)"}</pre></div>
-              <div><span className="small strong">내 입력</span><pre className="expanded">{local[conflict.section] || "(비어 있음)"}</pre></div>
-            </div>
-            <button className="btn btn-sm" onClick={() => navigator.clipboard.writeText(local[conflict.section] ?? "")}>내 입력 복사</button>
-          </div>
-        )}
-      </Modal>
+    <div className="stack">
+      <div className="tabs" role="tablist" aria-label="내 산출물">
+        {artifacts.map((x) => (
+          <button key={x.key} role="tab" className="tab" aria-selected={x.key === a.key} onClick={() => setActive(x.key)}>
+            {x.key}{draft[x.key] !== undefined && draft[x.key] !== x.body ? " •" : ""}
+          </button>
+        ))}
+      </div>
+      <section className="section-card" aria-labelledby={`art-${a.key}`}>
+        <div className="row"><h3 id={`art-${a.key}`}>{a.key} {a.title}</h3><span className="spacer" /><span className="badge num">v{a.version}</span></div>
+        <p className="help">{ARTIFACT_HINT[a.key]}</p>
+        <label htmlFor={`art-body-${a.key}`} className="sr-only">{a.title}</label>
+        <textarea id={`art-body-${a.key}`} className="textarea" value={value} readOnly={readOnly}
+          onChange={(e) => { const v = e.target.value; setDraft((d) => ({ ...d, [a.key]: v })); setState((s) => { const n = { ...s }; delete n[a.key]; return n; }); }} />
+        <div className="section-foot">
+          {st === "saving" && <span className="row small"><span className="spin" aria-hidden="true" />{COPY.saving}</span>}
+          {st === "saved" && !dirty && <span className="row small" style={{ color: "#15803d" }}><Icon name="check" />{COPY.saved}</span>}
+          {dirty && <span className="small muted">저장하지 않은 변경</span>}
+          <span className="spacer" />
+          <span className="muted num">{value.length.toLocaleString()}자</span>
+          {!readOnly && <button className="btn btn-primary btn-sm" disabled={!dirty || st === "saving"} onClick={save}>저장</button>}
+        </div>
+        {error && (st === "failed" || st === "conflict") && <p className="field-error" role="alert">{error}</p>}
+      </section>
     </div>
   );
 }

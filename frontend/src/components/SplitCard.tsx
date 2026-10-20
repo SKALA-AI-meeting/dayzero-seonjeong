@@ -1,58 +1,63 @@
 "use client";
-import { useState } from "react";
-import { OWNER_SHORT, SECTIONS, type Owner, type SplitProposal } from "@/lib/types";
+import { useEffect, useState } from "react";
+import type { SplitProposal } from "@/lib/types";
 
 type Props = {
   proposal: SplitProposal;
-  active: boolean; // 최신 제안이고 아직 확정 전일 때만 조작 가능
+  active: boolean;     // 분업이 아직 확정 전이고 입력 가능할 때만 조작
   confirmed: boolean;
-  onDecide: (decision: "ACCEPT" | "ADJUST", assignments: Record<string, Owner>) => Promise<void>;
-  // 조정과 확정은 한 번에: 바뀐 분담으로 확정하면 서버가 조정 이력을 남긴다
+  rounds: number; maxRounds: number;
+  onPropose: (p: SplitProposal) => Promise<void>;
 };
-const OWNERS: Owner[] = ["CANDIDATE", "JOINT", "COLLEAGUE"];
+const WHO = [["CANDIDATE", "나"], ["COLLEAGUE", "한서윤"]] as const;
 
-export function SplitCard({ proposal, active, confirmed, onDecide }: Props) {
-  const [draft, setDraft] = useState<Record<string, Owner>>(proposal.assignments);
+/** E0 분업 카드: 안내문·리워드 표 담당과 FAQ 5개 배분을 정해 서윤 님에게 제안한다(최대 3라운드). */
+export function SplitCard({ proposal, active, confirmed, rounds, maxRounds, onPropose }: Props) {
+  const [draft, setDraft] = useState<SplitProposal>(proposal);
   const [busy, setBusy] = useState(false);
-  const changed = SECTIONS.some((s) => draft[s.id] !== proposal.assignments[s.id]);
+  useEffect(() => setDraft(proposal), [proposal]);
 
-  async function act(kind: "ACCEPT" | "ADJUST_CONFIRM") {
+  async function submit() {
     setBusy(true);
-    try { await onDecide("ACCEPT", kind === "ACCEPT" ? proposal.assignments : draft); } finally { setBusy(false); }
+    try { await onPropose(draft); } finally { setBusy(false); }
   }
-
+  const sel = (key: "T1" | "T3", label: string) => (
+    <tr>
+      <td>{label}</td>
+      <td>{active ? (
+        <select className="select" aria-label={`${label} 담당`} value={draft[key]}
+          onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value as SplitProposal["T1"] }))}>
+          {WHO.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>) : <span>{WHO.find(([v]) => v === proposal[key])?.[1]}</span>}</td>
+    </tr>
+  );
   return (
-    <div className="card stack" role="group" aria-label="업무 분담안">
+    <div className="card stack" role="group" aria-label="업무 분담">
       <div className="row">
-        <h4>업무 분담안</h4><span className="spacer" />
-        {active ? <span className="badge warning">확정 전</span> : confirmed ? <span className="badge success">확정됨</span> : <span className="badge">이전 제안</span>}
+        <h4>업무 분담</h4><span className="spacer" />
+        {confirmed ? <span className="badge success">확정됨</span> : <span className="badge warning">논의 중 · {rounds}/{maxRounds}회 제안</span>}
       </div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>기획안 섹션</th><th style={{ width: 120 }}>담당</th></tr></thead>
+          <thead><tr><th>태스크</th><th style={{ width: 140 }}>담당</th></tr></thead>
           <tbody>
-            {SECTIONS.map((s) => (
-              <tr key={s.id}>
-                <td>{s.title}</td>
-                <td>
-                  {active ? (
-                    <select className="select" aria-label={`${s.title} 담당`} value={draft[s.id]}
-                      onChange={(e) => setDraft((d) => ({ ...d, [s.id]: e.target.value as Owner }))}>
-                      {OWNERS.map((o) => <option key={o} value={o}>{OWNER_SHORT[o]}</option>)}
-                    </select>
-                  ) : <span>{OWNER_SHORT[proposal.assignments[s.id]]}</span>}
-                </td>
-              </tr>
-            ))}
+            {sel("T1", "T1 앱 공지용 안내문")}
+            {sel("T3", "T3 리워드·일정 표")}
+            <tr>
+              <td>T2 고객 FAQ 5개</td>
+              <td>{active ? (
+                <select className="select" aria-label="FAQ 중 내가 맡을 개수" value={draft.faq_candidate}
+                  onChange={(e) => setDraft((d) => ({ ...d, faq_candidate: Number(e.target.value) }))}>
+                  {[0, 1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>나 {n} · 서윤 {5 - n}</option>)}
+                </select>) : <span>나 {proposal.faq_candidate} · 서윤 {5 - proposal.faq_candidate}</span>}</td>
+            </tr>
           </tbody>
         </table>
       </div>
       {active && (
         <div className="row">
-          <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => act(changed ? "ADJUST_CONFIRM" : "ACCEPT")}>
-            {changed ? "바꾼 분담으로 확정" : "이 분담으로 확정"}</button>
-          {changed && <button className="btn btn-sm" disabled={busy} onClick={() => setDraft(proposal.assignments)}>제안대로 되돌리기</button>}
-          <span className="muted">담당을 바꾼 뒤 확정하면 이도현 님이 맞춰 진행하고, 확정한 담당은 태스크 보드에 반영됩니다</span>
+          <button className="btn btn-primary btn-sm" disabled={busy} onClick={submit}>이렇게 나눠요</button>
+          <span className="muted">서윤 님이 답한 뒤 확정됩니다. 확정된 담당은 태스크 보드에 반영됩니다.</span>
         </div>
       )}
     </div>

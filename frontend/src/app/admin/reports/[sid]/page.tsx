@@ -4,230 +4,179 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AdminShell } from "@/components/AdminShell";
 import { Icon } from "@/components/Icon";
-import { Drawer } from "@/components/Overlay";
 import { api, ApiError, loadMe } from "@/lib/api";
 import { COPY } from "@/lib/types";
 
-type Ref = { kind: string; id: string; quote: string | null };
-type Fact = { text: string; at?: string | null; created_at?: string; event_id?: string; refs: Ref[] };
-type Situation = { event_id: string | null; situation: string; status: string; at: string | null };
-type Area = { dimension: string; label: string; status: string; situations: Situation[]; facts: Fact[]; limits: string;
-  interpretation: { text: string; label: string } | null; follow_up?: string; usage?: Record<string, number> };
-type Obs = { area: string; source: "RULES" | "AI"; text: string; at: string | null; quote: string | null };
-type Req = { message_id: string; at: string; created_at: string; request: string; reply: string | null;
-  work_started?: { section: string; run_status: string; cards: { section: string; status: string; decision: string | null; comment: string }[] }[] };
-type Raw = {
-  stats: Record<string, number>; observations: Obs[]; colleague_requests: Req[]; assistant_log: Req[];
-  card_decisions: { at: string; section: string; status: string; decision: string | null; comment: string; draft_preview: string }[];
-  task_reviews: { at: string; section: string; decision: string; comment: string }[];
-  revision_history: { at: string; version: number; section: string; actor: string; chars_before: number; chars_after: number; after_preview: string }[];
-  section_authorship: Record<string, { 지원자: number; 동료: number; last: string | null }>;
-};
+type Evidence = { kind: string; id: string; actor?: string; quote?: string; at?: string; turn?: number; artifact?: string; diff?: string[];
+  action?: string; entity?: string };
+type Obs = { code: string; definition: string; polarity: "positive" | "caution" | "neutral"; event_id: string | null; subject: string | null;
+  note: string | null; source: "AGENT" | "RULES"; evidence: Evidence };
+type Comp = { key: string; label: string; status: "OBSERVED" | "INSUFFICIENT" | "NO_OPPORTUNITY"; status_label: string;
+  related_events: { event_id: string; virtual_time: string; turn: number }[]; observations: Obs[]; notes: string[];
+  evidence_summary?: { text: string; label: string } };
 type Body = {
-  raw?: Raw;
-  generation_mode: string; policy_version: string; scenario_id: string; submitted_by: string;
-  timeline: { event_id: string; at: string; situation: string }[];
-  areas: Area[]; split_history: { kind: string; assignments: Record<string, string>; at: string }[];
-  final_artifact: { version: number; empty_sections: string[] }; limitations: string[];
+  scenario_title: string; generation_mode: string; ended_by: string; turn_count: number; virtual_time: string;
+  timeline: { event_id: string; virtual_time: string; turn: number; skipped: boolean; reason: string | null }[];
+  competencies: Comp[];
+  planted_errors: { id: string; where: string; difficulty: string; fixed: boolean; fixed_by: string | null; codes: string[] }[];
+  e2_change: { occurred: boolean; reflected: Record<string, boolean> };
+  commitments: { text: string; status: string; event_id: string | null; registered_turn: number }[];
+  final_board: { key: string; title: string; status: string; owner: string; eta: string | null }[];
+  raw: { messages: { id: string; actor: string; content: string; turn: number; kind: string | null; event_id: string | null; label: string | null; at: string }[];
+    revisions: { id: string; artifact: string; actor: string; version: number; turn: number; diff: string[] }[];
+    approvals: { artifact: string; targets: string[]; status: string; diff: string[] }[] };
+  reflection: string | null; limitations: string[];
 };
-const STATUS: Record<string, [string, string, string]> = {
-  OBSERVED: ["관찰됨", "success", "check"], INSUFFICIENT_EVIDENCE: ["관련 행동 근거 부족", "warning", "warning"],
-  NO_OPPORTUNITY: ["관찰 기회 없음", "", "info"], NOT_USED: ["사용하지 않음", "", "info"],
+const EVENT: Record<string, string> = {
+  E0: "스탠드업·분업", E1: "동료 도움 요청", E2: "팀장 요구사항 변경", E2B: "서윤 미반영", E3: "동료 급 이탈", E3B: "동료 복귀", E4: "마감 전 브리핑",
 };
-const CARD: Record<string, string> = { APPROVE: "승인", REJECT: "거절", REVISE: "재수정 요청" };
-const KIND: Record<string, string> = { message: "대화", action: "행동", artifact_revision: "문서 수정", tool_call: "도구 호출" };
-const STATE_COPY: Record<string, string> = { PENDING: "제출 내용을 정리할 준비를 하고 있습니다.", RUNNING: "행동 기록과 근거를 연결하고 있습니다." };
+const STATUS: Record<string, [string, string]> = { OBSERVED: ["success", "check"], INSUFFICIENT: ["warning", "warning"], NO_OPPORTUNITY: ["", "info"] };
+const POLARITY: Record<string, string> = { positive: "success", caution: "warning", neutral: "" };
+const OWNER: Record<string, string> = { CANDIDATE: "지원자", COLLEAGUE: "한서윤", SPLIT: "나눠서", UNASSIGNED: "미정" };
+const TASK: Record<string, string> = { TODO: "할 일", IN_PROGRESS: "진행 중", DONE: "완료" };
+const STATE_COPY: Record<string, string> = { PENDING: "리포트를 준비하고 있습니다.", RUNNING: "관찰 코드와 근거를 연결하고 있습니다." };
 
-function StatusBadge({ s }: { s: string }) {
-  const v = STATUS[s] ?? [s, "", "info"];
-  return <span className={`badge ${v[1]}`}><Icon name={v[2]} />{v[0]}</span>;
+function Diff({ lines }: { lines: string[] }) {
+  if (!lines.length) return <span className="muted">변경 없음</span>;
+  return <pre className="small" style={{ whiteSpace: "pre-wrap", margin: 0 }}>{lines.map((l, i) => (
+    <span key={i} style={{ display: "block", color: l.startsWith("+") ? "#15803d" : l.startsWith("-") ? "#b91c1c" : undefined }}>{l}</span>))}</pre>;
+}
+
+function EvidenceView({ e }: { e: Evidence }) {
+  if (e.kind === "message") return (
+    <div className="card-sub small stack"><div className="row"><span className="strong">{e.actor}</span><span className="muted num">{e.at} · 턴 {e.turn}</span>
+      <span className="spacer" /><a href={`#m-${e.id}`} className="small">원문 위치</a></div><div style={{ whiteSpace: "pre-wrap" }}>“{e.quote}”</div></div>);
+  if (e.kind === "revision") return (
+    <div className="card-sub small stack"><div className="row"><span className="strong">{e.actor}</span><span className="muted">{e.artifact} 수정 · 턴 {e.turn}</span></div><Diff lines={e.diff ?? []} /></div>);
+  if (e.kind === "action") return <div className="card-sub small">행동 기록: {e.action} {e.entity ?? ""} · 턴 {e.turn}</div>;
+  return <div className="card-sub small">{e.kind}: {e.id}</div>;
 }
 
 export default function ReportPage() {
   const { sid } = useParams<{ sid: string }>();
-  const [r, setR] = useState<{ status: string; body: Body | null } | null>(null);
-  const [alias, setAlias] = useState<string>("");
+  const [rep, setRep] = useState<{ status: string; body: Body | null; error_code: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [evidence, setEvidence] = useState<{ fact: Fact; area: string } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
-    try { setR(await api<{ status: string; body: Body | null }>(`/reports/${sid}`)); }
-    catch (e) { setError(e instanceof ApiError && e.status !== 503 ? "리포트를 찾을 수 없습니다." : "리포트를 불러오지 못했습니다."); }
+    try { setRep(await api(`/reports/${sid}`)); }
+    catch (e) { setError(e instanceof ApiError ? e.message : "리포트를 불러오지 못했습니다"); }
   }, [sid]);
+  useEffect(() => { loadMe().then(load); }, [load]);
   useEffect(() => {
-    loadMe().then(() => { load(); api<{ items: { id: string; alias: string }[] }>("/sessions").then((x) => setAlias(x.items.find((i) => i.id === sid)?.alias ?? "")).catch(() => undefined); });
-  }, [sid, load]);
-  useEffect(() => {
-    if (!r || r.status === "READY" || r.status === "FAILED") return;
+    if (!rep || rep.status === "READY" || rep.status === "FAILED") return;
     const t = setTimeout(load, 2000);
     return () => clearTimeout(t);
-  }, [r, load]);
+  }, [rep, load]);
 
   async function retry() {
-    try { await api(`/reports/${sid}/retry`, { method: "POST", json: {} }); load(); } catch { setError("다시 생성하지 못했습니다."); }
+    setBusy(true);
+    try { await api(`/reports/${sid}/retry`, { method: "POST" }); await load(); }
+    catch (e) { setError(e instanceof ApiError ? e.message : "다시 생성하지 못했습니다"); }
+    finally { setBusy(false); }
   }
 
-  const b = r?.body;
-  const counts = b ? {
-    observed: b.areas.filter((a) => a.status === "OBSERVED").length,
-    noOpp: b.areas.filter((a) => a.status === "NO_OPPORTUNITY").length,
-    events: b.timeline.filter((t) => !["T-KICKOFF", "T-INTERVIEW", "T-END"].includes(t.event_id)).length,
-  } : null;
-
+  const b = rep?.body;
   return (
-    <AdminShell title="행동 근거 기반 평가 리포트" actions={<Link className="btn btn-sm" href="/admin/sessions">세션 목록</Link>}>
-      <div className="stack-lg" style={{ maxWidth: 1080 }}>
+    <AdminShell title="관찰 리포트" actions={<Link className="btn btn-sm" href="/admin/sessions">세션 목록</Link>}>
+      <div className="stack-lg">
         {error && <div className="alert error" role="alert"><Icon name="error" />{error}</div>}
-        {r && (r.status === "PENDING" || r.status === "RUNNING") && <div className="alert" role="status"><span className="spin" />{STATE_COPY[r.status]}</div>}
-        {r?.status === "FAILED" && <div className="alert error"><Icon name="error" /><span style={{ flex: 1 }}>{COPY.report_failed}</span><button className="btn btn-sm" onClick={retry}>다시 생성</button></div>}
-        {b && counts && (
+        {rep && rep.status !== "READY" && rep.status !== "FAILED" && <p className="row muted"><span className="spin" />{STATE_COPY[rep.status] ?? rep.status}</p>}
+        {rep?.status === "FAILED" && (
+          <div className="alert error" role="alert"><Icon name="error" /><span style={{ flex: 1 }}>{COPY.report_failed} ({rep.error_code})</span>
+            <button className="btn btn-sm" disabled={busy} onClick={retry}>다시 생성</button></div>
+        )}
+        {b && (
           <>
-            <div className="page-head">
-              <div className="stack" style={{ marginTop: 0 }}>
-                <h2>{alias || "지원자"}</h2>
-                <p className="muted">시나리오 {b.scenario_id} · 정책 {b.policy_version} · 생성 방식 {b.generation_mode === "RULES_FALLBACK" ? "규칙 기반 대체" : "AI + 규칙"} ·
-                  {b.submitted_by === "CANDIDATE" ? " 지원자 직접 제출" : " 시간 종료 자동 제출"} · 최종 기획안 v{b.final_artifact.version}</p>
-              </div>
-            </div>
-            <div className="alert neutral"><Icon name="info" /><div>{COPY.report_limit} 점수·순위·합격 여부를 만들지 않으며 판단은 검토자가 합니다.</div></div>
-            {b.generation_mode === "RULES_FALLBACK" && <div className="alert"><Icon name="info" />이 리포트는 기록된 사실만 규칙으로 정리했습니다. AI 해석은 포함되지 않았습니다.</div>}
+            <div className="alert neutral"><Icon name="info" /><div>{COPY.report_limit}</div></div>
             <div className="summary-cards">
-              <div className="card"><div className="muted">관찰된 영역</div><div className="display num">{counts.observed}<span className="small"> / 5</span></div></div>
-              <div className="card"><div className="muted">관찰 기회 없음</div><div className="display num">{counts.noOpp}</div></div>
-              <div className="card"><div className="muted">발생한 상황</div><div className="display num">{counts.events}</div></div>
-              <div className="card"><div className="muted">빈 섹션</div><div className="display num">{b.final_artifact.empty_sections.length}</div></div>
+              <div className="card"><div className="muted">시나리오</div><div className="strong">{b.scenario_title}</div></div>
+              <div className="card"><div className="muted">종료</div><div className="strong">{b.ended_by === "CANDIDATE" ? "지원자가 업무 종료" : "자동 종료"} · {b.virtual_time}</div></div>
+              <div className="card"><div className="muted">진행 턴</div><div className="strong num">{b.turn_count}</div></div>
+              <div className="card"><div className="muted">기록된 관찰 코드</div><div className="strong num">{b.competencies.reduce((n, c) => n + c.observations.length, 0)}</div></div>
             </div>
-            <section className="card stack" aria-labelledby="tl-title">
-              <h3 id="tl-title">관찰 범위 및 발생 상황</h3>
+
+            <section className="stack"><h2>이벤트 타임라인</h2>
               <div className="table-wrap"><table>
-                <thead><tr><th style={{ width: 80 }}>시각</th><th>상황</th></tr></thead>
-                <tbody>{b.timeline.map((e) => <tr key={e.event_id}><td className="num">{e.at}</td><td>{e.situation}</td></tr>)}</tbody>
+                <thead><tr><th>이벤트</th><th>가상 시각</th><th className="num">턴</th><th>상태</th></tr></thead>
+                <tbody>{b.timeline.map((t) => (
+                  <tr key={t.event_id}><td>{t.event_id} {EVENT[t.event_id]}</td><td className="num">{t.virtual_time}</td><td className="num">{t.turn}</td>
+                    <td>{t.skipped ? <span className="badge" title={t.reason ?? ""}>건너뜀 · {t.reason}</span> : <span className="badge success">발생</span>}</td></tr>))}</tbody>
               </table></div>
-              {b.split_history.length > 0 && <p className="small">업무 분담 변경: {b.split_history.map((s) => `${s.at} ${s.kind === "SPLIT_CONFIRMED" ? "확정" : "조정 요청"}`).join(" → ")}</p>}
             </section>
-            <h3>행동 요소</h3>
-            {b.areas.map((a) => (
-              <section key={a.dimension} className="card stack" aria-labelledby={`area-${a.dimension}`}>
-                <div className="row"><h3 id={`area-${a.dimension}`}>{a.label}</h3><span className="spacer" /><StatusBadge s={a.status} /></div>
-                <dl className="kv">
-                  <dt>관찰 기회</dt>
-                  <dd><ul className="checklist" style={{ paddingLeft: 16 }}>{a.situations.map((s, i) => <li key={i}><span className="num strong">{s.at ? `${s.at} ` : ""}</span>{s.situation} <StatusBadge s={s.status} /></li>)}</ul></dd>
-                  <dt>실제 행동</dt>
-                  <dd>
-                    {a.facts.length === 0 ? <span className="muted">{a.limits}</span> : (
-                      <div className="table-wrap"><table>
-                        <thead><tr><th style={{ width: 70 }}>시각</th><th>행동</th><th style={{ width: 120 }}>원문 근거</th></tr></thead>
-                        <tbody>{a.facts.map((f, i) => (
-                          <tr key={i}>
-                            <td className="num">{f.at ?? (f.created_at ? new Date(f.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Seoul" }) : "")}</td>
-                            <td>{f.text}</td>
-                            <td><button className="chip" onClick={() => setEvidence({ fact: f, area: a.label })}><Icon name="doc" />{KIND[f.refs[0]?.kind] ?? "기록"} #{f.refs[0]?.id.slice(0, 6)}</button></td>
-                          </tr>
-                        ))}</tbody>
-                      </table></div>
-                    )}
-                    {a.usage && <p className="help">어시스턴트 요청 {a.usage.assistant_requests}회 · 도구 호출 {a.usage.assistant_tool_calls}회 (사용량만으로 평가하지 않음)</p>}
-                  </dd>
-                  <dt>제한된 해석</dt>
-                  <dd className="interp">{a.interpretation ? <><span className="badge info">AI 추정</span> {a.interpretation.text}</> : <span className="small">규칙 기반 리포트라 해석을 생성하지 않았습니다. 원문 근거를 보고 판단해 주세요.</span>}</dd>
-                  {a.follow_up && <><dt>후속 확인점</dt><dd className="small">{a.follow_up}</dd></>}
-                  <dt>한계</dt>
-                  <dd className="limits small">{a.limits}</dd>
-                </dl>
-              </section>
-            ))}
-            {b.raw && <RawMaterials raw={b.raw} />}
-            <section className="card stack"><h3>한계 및 후속 확인점</h3><ul className="checklist">{b.limitations.map((l) => <li key={l}>{l}</li>)}</ul></section>
+
+            <section className="stack"><h2>역량별 관찰</h2>
+              {b.competencies.map((c) => (
+                <article key={c.key} className="card stack" aria-labelledby={`c-${c.key}`}>
+                  <div className="row"><h3 id={`c-${c.key}`}>{c.label}</h3>
+                    <span className={`badge ${STATUS[c.status][0]}`}><Icon name={STATUS[c.status][1]} />{c.status_label}</span><span className="spacer" />
+                    <span className="muted">관련 이벤트: {c.related_events.length ? c.related_events.map((e) => `${e.event_id}(${e.virtual_time})`).join(", ") : "발생 없음"}</span>
+                  </div>
+                  {c.notes.map((n) => <div key={n} className="limits small"><Icon name="info" /> {n}</div>)}
+                  {c.evidence_summary && <div className="interp small"><span className="badge info">{c.evidence_summary.label}</span> {c.evidence_summary.text}</div>}
+                  {c.observations.length === 0 && <p className="muted">{c.status === "NO_OPPORTUNITY" ? "이 역량을 볼 이벤트가 발생하지 않았습니다." : "관련 이벤트는 발생했지만 기록된 행동 코드가 없습니다. 부정으로 해석하지 않습니다."}</p>}
+                  {c.observations.map((o, i) => (
+                    <div key={i} className="stack" style={{ borderTop: i ? "1px solid var(--color-border)" : undefined, paddingTop: i ? 12 : 0 }}>
+                      <div className="row">
+                        <span className={`badge ${POLARITY[o.polarity]}`}>{o.code}</span>
+                        <span className="strong">{o.definition}</span>
+                        <span className="spacer" />
+                        {o.event_id && <span className="badge">{o.event_id} {EVENT[o.event_id]}</span>}
+                        {o.subject && /^(PE|E2)/.test(o.subject) && <span className="badge">{o.subject}</span>}
+                        <span className="muted">{o.source === "AGENT" ? "대화 분기" : "로그 규칙"}</span>
+                      </div>
+                      {o.note && <p className="small muted">{o.note}</p>}
+                      <EvidenceView e={o.evidence} />
+                    </div>
+                  ))}
+                </article>
+              ))}
+            </section>
+
+            <section className="stack"><h2>심어둔 오류·변경 반영·약속</h2>
+              <div className="table-wrap"><table>
+                <thead><tr><th>오류</th><th>위치</th><th>난이도</th><th>최종 상태</th><th>관련 코드</th></tr></thead>
+                <tbody>{b.planted_errors.map((p) => (
+                  <tr key={p.id}><td>{p.id}</td><td className="small">{p.where}</td><td>{p.difficulty}</td>
+                    <td>{p.fixed ? <span className="badge success">수정됨 · {p.fixed_by}</span> : <span className="badge">남아 있음</span>}</td>
+                    <td>{p.codes.join(", ") || <span className="muted">—</span>}</td></tr>))}</tbody>
+              </table></div>
+              {b.e2_change.occurred && <p className="small">E2 변경(피초대자 2,000P) 반영: {Object.entries(b.e2_change.reflected).map(([k, v]) => `${k} ${v ? "반영" : "미반영"}`).join(" · ")}</p>}
+              {b.commitments.length > 0 && <ul className="checklist small">{b.commitments.map((c, i) => (
+                <li key={i}>“{c.text}” — 턴 {c.registered_turn} 등록 · <span className={`badge ${c.status === "KEPT" ? "success" : c.status === "BROKEN" ? "warning" : ""}`}>{c.status === "KEPT" ? "이행" : c.status === "BROKEN" ? "미이행" : "판정 전"}</span></li>))}</ul>}
+              <div className="table-wrap"><table>
+                <thead><tr><th>종료 시 태스크</th><th>담당</th><th>상태</th><th>예상 시각</th></tr></thead>
+                <tbody>{b.final_board.map((t) => <tr key={t.key}><td>{t.key} {t.title}</td><td>{OWNER[t.owner] ?? t.owner}</td><td>{TASK[t.status] ?? t.status}</td><td className="num">{t.eta ?? "—"}</td></tr>)}</tbody>
+              </table></div>
+            </section>
+
+            <section className="stack"><h2>지원자 소감</h2>
+              {b.reflection ? <div className="card-sub" style={{ whiteSpace: "pre-wrap" }}>{b.reflection}</div> : <p className="muted">남기지 않았습니다.</p>}
+            </section>
+
+            <section className="stack"><h2>원자료</h2>
+              <details><summary className="strong">대화 전체 ({b.raw.messages.length})</summary>
+                <div className="table-wrap" style={{ marginTop: 8 }}><table>
+                  <thead><tr><th>턴</th><th>시각</th><th>보낸 사람</th><th>내용</th><th>구분</th></tr></thead>
+                  <tbody>{b.raw.messages.map((m) => (
+                    <tr key={m.id} id={`m-${m.id}`}><td className="num">{m.turn}</td><td className="num">{m.at}</td><td className="small">{m.actor}</td>
+                      <td style={{ whiteSpace: "pre-wrap" }}>{m.content}</td>
+                      <td className="small muted">{m.kind === "SCENARIO_EVENT" ? `이벤트 ${m.event_id}` : m.kind === "SCENARIO_BRANCH" ? `분기 ${m.label}` : m.kind ?? ""}</td></tr>))}</tbody>
+                </table></div>
+              </details>
+              <details><summary className="strong">산출물 수정 이력 ({b.raw.revisions.length})</summary>
+                <div className="stack" style={{ marginTop: 8 }}>{b.raw.revisions.map((r) => (
+                  <div key={r.id} className="card-sub small stack"><div className="row"><span className="strong">{r.artifact} v{r.version}</span><span className="muted">{r.actor} · 턴 {r.turn}</span></div><Diff lines={r.diff} /></div>))}</div>
+              </details>
+              <details><summary className="strong">서윤 수정안 승인 카드 ({b.raw.approvals.length})</summary>
+                <div className="stack" style={{ marginTop: 8 }}>{b.raw.approvals.map((a, i) => (
+                  <div key={i} className="card-sub small stack"><div className="row"><span className="strong">{a.artifact}</span><span className="badge">{a.status}</span><span className="muted">{a.targets.join(", ")}</span></div><Diff lines={a.diff} /></div>))}</div>
+              </details>
+            </section>
+            <ul className="checklist small muted">{b.limitations.map((l) => <li key={l}>{l}</li>)}</ul>
           </>
         )}
       </div>
-      <Drawer open={!!evidence} title="원문 근거" onClose={() => setEvidence(null)}>
-        {evidence && (
-          <div className="stack">
-            <p className="muted">{evidence.area} · {KIND[evidence.fact.refs[0]?.kind] ?? "기록"} · {evidence.fact.at ?? ""}</p>
-            <dl className="kv">
-              <dt>원문 ID</dt><dd className="num small" style={{ overflowWrap: "anywhere" }}>{evidence.fact.refs.map((x) => `${x.kind}:${x.id}`).join(", ")}</dd>
-              <dt>작성자</dt><dd>지원자</dd>
-              <dt>기록 시각</dt><dd className="num">{evidence.fact.created_at ? new Date(evidence.fact.created_at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", hour12: false }) : "—"}</dd>
-            </dl>
-            <div className="card-sub doc-body">{evidence.fact.refs[0]?.quote ?? evidence.fact.text}</div>
-          </div>
-        )}
-      </Drawer>
     </AdminShell>
-  );
-}
-
-
-function Details({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
-  return (
-    <section className="card stack">
-      <details open>
-        <summary className="row" style={{ cursor: "pointer" }}><h3 style={{ display: "inline" }}>{title}</h3><span className="badge">{count}건</span></summary>
-        <div style={{ marginTop: 12 }}>{children}</div>
-      </details>
-    </section>
-  );
-}
-
-/** 사람이 판단할 원자료 전체(판정 없음). AI 사전 확인 사항은 '어디를 볼지'만 짚는다. */
-function RawMaterials({ raw }: { raw: Raw }) {
-  const pre = { whiteSpace: "pre-wrap" as const, margin: 0 };
-  return (
-    <>
-      <h3>검토 자료(원문 전체)</h3>
-      <div className="alert neutral"><Icon name="info" />아래는 판단을 위한 원자료입니다. AI 사전 확인 사항은 판정이 아니라 확인할 위치를 먼저 짚어 둔 것이며, 판단은 원문을 보고 검토자가 합니다.</div>
-      <section className="card stack" aria-label="AI 사전 확인 사항">
-        <h3>AI 사전 확인 사항</h3>
-        <div className="table-wrap"><table>
-          <thead><tr><th style={{ width: 110 }}>관점</th><th style={{ width: 64 }}>시각</th><th>확인 내용</th><th style={{ width: 70 }}>출처</th></tr></thead>
-          <tbody>{raw.observations.map((o, i) => (
-            <tr key={i}>
-              <td><span className={`badge ${o.area.includes("태도") ? "warning" : ""}`}>{o.area}</span></td>
-              <td className="num">{o.at ?? "—"}</td>
-              <td>{o.text}{o.quote && <div className="muted">“{o.quote}”</div>}</td>
-              <td><span className={`badge ${o.source === "AI" ? "info" : ""}`}>{o.source === "AI" ? "AI 추정" : "규칙"}</span></td>
-            </tr>))}</tbody>
-        </table></div>
-      </section>
-      <Details title="동료(이도현)에게 한 요청과 결과" count={raw.colleague_requests.length}>
-        <div className="table-wrap"><table>
-          <thead><tr><th style={{ width: 64 }}>시각</th><th>지원자 요청</th><th>동료 답변</th><th style={{ width: 200 }}>시작된 작업·카드 결과</th></tr></thead>
-          <tbody>{raw.colleague_requests.map((r) => (
-            <tr key={r.message_id}>
-              <td className="num">{r.at}</td><td><p style={pre}>{r.request}</p></td>
-              <td className="small"><p style={pre}>{r.reply ?? "—"}</p></td>
-              <td className="small">{(r.work_started ?? []).length === 0 ? "—" : r.work_started!.map((w, i) => (
-                <div key={i}>{w.section}: {w.cards.length ? w.cards.map((c) => `${CARD[c.decision ?? ""] ?? c.status}${c.comment ? `(${c.comment.slice(0, 30)})` : ""}`).join(", ") : w.run_status}</div>))}</td>
-            </tr>))}</tbody>
-        </table></div>
-      </Details>
-      <Details title="확인 카드 결정 내역" count={raw.card_decisions.length}>
-        <div className="table-wrap"><table>
-          <thead><tr><th style={{ width: 64 }}>시각</th><th style={{ width: 150 }}>섹션</th><th style={{ width: 100 }}>결정</th><th>검토 사항</th><th>동료 초안(앞부분)</th></tr></thead>
-          <tbody>{raw.card_decisions.map((c, i) => (
-            <tr key={i}><td className="num">{c.at}</td><td>{c.section}</td><td>{CARD[c.decision ?? ""] ?? (c.status === "PENDING" ? "미결정" : c.status)}</td>
-              <td className="small">{c.comment || "—"}</td><td className="small"><p style={pre}>{c.draft_preview}</p></td></tr>))}</tbody>
-        </table></div>
-        {raw.task_reviews.length > 0 && <p className="help">태스크 검토: {raw.task_reviews.map((t) => `${t.at} ${t.section} ${t.decision}${t.comment ? `(“${t.comment.slice(0, 40)}”)` : ""}`).join(" · ")}</p>}
-      </Details>
-      <Details title="기획안 수정 이력" count={raw.revision_history.length}>
-        <div className="row" style={{ marginBottom: 8 }}>{Object.entries(raw.section_authorship).map(([sec, a]) => (
-          <span key={sec} className="badge">{sec}: 지원자 {a.지원자}회 · 동료 {a.동료}회</span>))}</div>
-        <div className="table-wrap"><table>
-          <thead><tr><th style={{ width: 64 }}>시각</th><th style={{ width: 50 }}>버전</th><th style={{ width: 150 }}>섹션</th><th style={{ width: 170 }}>수정 주체</th><th style={{ width: 90 }}>글자 수</th><th>수정 후(앞부분)</th></tr></thead>
-          <tbody>{raw.revision_history.map((h, i) => (
-            <tr key={i}><td className="num">{h.at}</td><td className="num">v{h.version}</td><td>{h.section}</td><td className="small">{h.actor}</td>
-              <td className="num small">{h.chars_before}→{h.chars_after}</td><td className="small"><p style={pre}>{h.after_preview}</p></td></tr>))}</tbody>
-        </table></div>
-      </Details>
-      <Details title="AI 어시스턴트 대화 전체" count={raw.assistant_log.length}>
-        <div className="table-wrap"><table>
-          <thead><tr><th style={{ width: 64 }}>시각</th><th>지원자 질문</th><th>어시스턴트 답변</th></tr></thead>
-          <tbody>{raw.assistant_log.map((r) => (
-            <tr key={r.message_id}><td className="num">{r.at}</td><td><p style={pre}>{r.request}</p></td><td className="small"><p style={pre}>{r.reply ?? "—"}</p></td></tr>))}</tbody>
-        </table></div>
-      </Details>
-    </>
   );
 }

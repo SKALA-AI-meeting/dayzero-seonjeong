@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Day Zero — 루프랩 프로덕트팀",
+  title: "Day Zero — 핏모아 운영팀",
   description: "AI 동료와 함께 일하는 하루를 통해 협업 행동을 관찰하는 MVP",
 };
 

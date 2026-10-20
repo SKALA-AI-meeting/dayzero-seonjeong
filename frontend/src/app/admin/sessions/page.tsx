@@ -8,13 +8,9 @@ import { Modal } from "@/components/Overlay";
 import { api, ApiError, loadMe } from "@/lib/api";
 
 type Item = { id: string; alias: string; status: string; phase: string; report_status: string | null; created_at: string; submitted_at: string | null };
-const STATUS: Record<string, [string, string]> = { CREATED: ["생성됨", ""], ACTIVE: ["진행 중", "info"], SUBMITTED: ["제출 완료", "success"] };
-const PHASE: Record<string, string> = { BRIEF: "과제 확인", WORK: "업무 진행", REVIEW: "검토", CLOSED: "종료" };
+const STATUS: Record<string, [string, string]> = { CREATED: ["생성됨", ""], ACTIVE: ["진행 중", "info"], SUBMITTED: ["종료", "success"] };
+const PHASE: Record<string, string> = { BRIEF: "안내 확인", WORK: "업무 진행", CLOSED: "종료" };
 const REPORT: Record<string, [string, string]> = { PENDING: ["대기", "warning"], RUNNING: ["생성 중", "info"], READY: ["준비됨", "success"], FAILED: ["실패", "error"] };
-const DEMO_EVENTS: [string, string][] = [
-  ["T-SPLIT", "00:10 업무 분담"], ["T-HELP", "00:30 도움 요청"], ["T-DELAY", "00:50 자료 지연"], ["T-INTERVIEW", "01:05 인터뷰 공개"],
-  ["T-PIVOT", "01:10 대상 변경"], ["T-ERROR", "01:30 동료 오류"], ["T-DEADLINE", "01:50 마감 보고"], ["T-END", "02:00 종료·자동 제출"],
-];
 const kst = (iso: string) => new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 
 export default function AdminSessions() {
@@ -60,12 +56,12 @@ export default function AdminSessions() {
   }
   function closeInvite() { setInviteOpen(false); setInvite(null); setAlias(""); }
 
-  async function advance(id: string, ev: string) {
+  async function advance(id: string) {
     try {
-      const r = await api<{ fired: string[]; elapsed_min: number }>(`/sessions/${id}/demo/advance`, { method: "POST", json: { to_event: ev } });
-      setDemoMsg(`발생한 이벤트: ${r.fired.join(", ") || "없음"} · 경과 ${Math.floor(r.elapsed_min)}분`);
+      const r = await api<{ fired: string[]; turn_count: number }>(`/sessions/${id}/demo/advance`, { method: "POST" });
+      setDemoMsg(`발생한 이벤트: ${r.fired.join(", ") || "없음(조건 불충족 이벤트는 건너뜀)"} · 턴 ${r.turn_count}`);
       refresh();
-    } catch (e) { setDemoMsg(e instanceof ApiError ? e.message : "시간 이동에 실패했습니다"); }
+    } catch (e) { setDemoMsg(e instanceof ApiError ? e.message : "이벤트를 발생시키지 못했습니다"); }
   }
 
   return (
@@ -73,7 +69,7 @@ export default function AdminSessions() {
       <div className="stack-lg">
         <p className="help">초대를 만들고 진행 및 제출 상태를 확인합니다.</p>
         {error && <div className="alert error" role="alert"><Icon name="error" /><span style={{ flex: 1 }}>{error}</span><button className="btn btn-sm" onClick={() => { setError(null); refresh(); }}>다시 시도</button></div>}
-        {demo && <div className="alert warning"><Icon name="clock" /><div><div className="alert-title">시연 모드</div>진행 중인 세션의 시험 시계를 다음 이벤트로 옮길 수 있습니다. 지원자 화면에는 표시되지 않습니다.{demoMsg && <div className="small">{demoMsg}</div>}</div></div>}
+        {demo && <div className="alert warning"><Icon name="clock" /><div><div className="alert-title">시연 모드</div>진행 중인 세션에서 다음 이벤트의 트리거 턴까지 건너뛰어 이벤트를 발생시킬 수 있습니다. 지원자 화면에는 표시되지 않습니다.{demoMsg && <div className="small">{demoMsg}</div>}</div></div>}
         <div className="table-wrap">
           {items === null ? <p className="row muted" style={{ padding: 16 }}><span className="spin" />불러오는 중…</p> : items.length === 0 ? (
             <div style={{ padding: 24 }} className="stack"><p>아직 생성된 지원자 세션이 없습니다. 초대 링크를 만들어 첫 세션을 시작하세요.</p><div><button className="btn btn-primary btn-sm" onClick={() => setInviteOpen(true)}>새 초대 만들기</button></div></div>
@@ -84,20 +80,16 @@ export default function AdminSessions() {
                 {items.map((s) => (
                   <tr key={s.id}>
                     <td><div className="strong">{s.alias}</div><div className="muted num">{s.id.slice(-8)}</div></td>
-                    <td className="small">모아런 재참여율 개선</td>
+                    <td className="small">핏모아 친구 초대 이벤트</td>
                     <td><span className={`badge ${STATUS[s.status]?.[1]}`}>{STATUS[s.status]?.[0] ?? s.status}</span></td>
                     <td className="small">{PHASE[s.phase] ?? s.phase}</td>
                     <td>{s.report_status ? <span className={`badge ${REPORT[s.report_status]?.[1]}`}>{REPORT[s.report_status]?.[0]}</span> : <span className="muted">—</span>}</td>
                     <td className="num small">{kst(s.created_at)}</td>
                     <td>
                       <div className="row">
-                        {s.report_status ? <Link className="btn btn-sm" href={`/admin/reports/${s.id}`}>리포트 열기</Link> : <span className="muted">제출 전</span>}
+                        {s.report_status ? <Link className="btn btn-sm" href={`/admin/reports/${s.id}`}>리포트 열기</Link> : <span className="muted">종료 전</span>}
                         {demo && s.status === "ACTIVE" && (
-                          <select className="select" aria-label={`${s.alias} 시연: 이벤트로 이동`} defaultValue=""
-                            onChange={(e) => { if (e.target.value) advance(s.id, e.target.value); e.target.value = ""; }}>
-                            <option value="">시연: 이벤트로 이동…</option>
-                            {DEMO_EVENTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-                          </select>
+                          <button className="btn btn-sm" aria-label={`${s.alias} 시연: 다음 이벤트 발생`} onClick={() => advance(s.id)}>시연: 다음 이벤트</button>
                         )}
                       </div>
                     </td>

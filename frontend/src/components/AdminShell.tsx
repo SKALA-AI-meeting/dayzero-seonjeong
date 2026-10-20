@@ -17,7 +17,7 @@ export function AdminShell({ title, actions, children }: { title: string; action
       <nav className="admin-nav" aria-label="관리자 메뉴">
         <Link href="/admin/sessions" className="wordmark"><span className="wordmark-dot" aria-hidden="true" />Day Zero</Link>
         <Link href="/admin/sessions" className="nav-item" aria-current={path.startsWith("/admin/sessions") || path.startsWith("/admin/reports")}>지원자 세션</Link>
-        <div className="muted" style={{ padding: "12px 8px 0" }}>시나리오: 루프랩 모아런 재참여율 개선(읽기 전용)</div>
+        <div className="muted" style={{ padding: "12px 8px 0" }}>시나리오: 핏모아 친구 초대 이벤트 런칭 준비(sc-a, 읽기 전용)</div>
       </nav>
       <div className="admin-main">
         <header className="admin-header">
