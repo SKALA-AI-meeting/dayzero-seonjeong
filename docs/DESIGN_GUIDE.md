@@ -96,20 +96,24 @@ PRD의 원래 나열 순서는 `problem → evidence → options → experiment 
 
 | Token | HEX | 용도 |
 |---|---:|---|
-| `color.primary` | `#FF6347` | 브랜드, 단일 주요 행동, 활성 표시 |
-| `color.primaryHover` | `#E64F37` | 주요 버튼 hover |
-| `color.primarySoft` | `#FFF0EC` | 활성 내비게이션, 가벼운 강조, 선택 배경 |
-| `color.onPrimary` | `#111827` | 코랄 버튼 텍스트·아이콘 |
-| `color.heading` | `#253247` | 제목, 강한 레이블 |
-| `color.body` | `#334155` | 본문, 입력 값 |
-| `color.muted` | `#64748B` | 보조 정보, 시간, 메타데이터 |
-| `color.background` | `#F8F9FC` | 앱 배경 |
+| `color.primary` | `#16181D` | 단일 주요 행동, 핵심 CTA |
+| `color.primaryHover` | `#2B2E34` | 주요 버튼 hover, Core palette의 파생색 |
+| `color.primarySoft` | `#E9ECEF` | 활성 내비게이션, 가벼운 강조, 선택 배경 |
+| `color.onPrimary` | `#F8F9FA` | 딥 차콜 버튼 텍스트·아이콘 |
+| `color.accent` | `#1E3A8A` | 브랜드 포인트, 진행·선택 강조, 링크 |
+| `color.heading` | `#16181D` | 제목, 강한 레이블 |
+| `color.body` | `#16181D` | 본문, 입력 값 |
+| `color.muted` | `#6B7280` | 보조 정보, 시간, 메타데이터 |
+| `color.background` | `#F8F9FA` | 앱 배경 |
 | `color.surface` | `#FFFFFF` | 패널, 카드, 입력 배경 |
-| `color.border` | `#E5E7EB` | 기본 경계선 |
+| `color.border` | `#E9ECEF` | 기본 경계선 |
+| `color.borderStrong` | `#C3C8CF` | 입력 hover, 선택 가능 영역 |
 | `color.success` | `#16A34A` | 저장 완료, 완료 |
-| `color.info` | `#2563EB` | 정보, 진행 중 |
+| `color.info` | `#1E3A8A` | 정보, 진행 중, 브랜드 포인트 |
 | `color.warning` | `#D97706` | 승인 대기, 주의 |
 | `color.error` | `#DC2626` | 오류, 실패, 파괴적 결과 안내 |
+
+메인 팔레트는 Cool gray + Ink blue의 여섯 색 `#F8F9FA`, `#E9ECEF`, `#C3C8CF`, `#6B7280`, `#16181D`, `#1E3A8A`로 고정한다. 흰색 Surface와 성공·경고·오류 색은 표면 및 의미 상태 전달을 위한 보조 토큰이며 브랜드 팔레트로 확장하지 않는다.
 
 #### Derived semantic colors
 
@@ -119,23 +123,24 @@ PRD의 원래 나열 순서는 `problem → evidence → options → experiment 
 |---|---:|---|
 | `color.successSoft` | `#F0FDF4` | 성공 배너·배지 배경 |
 | `color.successBorder` | `#BBF7D0` | 성공 경계 |
-| `color.infoSoft` | `#EFF6FF` | 정보·진행 배경 |
-| `color.infoBorder` | `#BFDBFE` | 정보 경계 |
+| `color.infoSoft` | `#EEF2FF` | 정보·진행 배경, Ink blue 파생색 |
+| `color.infoBorder` | `#C7D2FE` | 정보 경계, Ink blue 파생색 |
 | `color.warningSoft` | `#FFFBEB` | 승인 대기·경고 배경 |
 | `color.warningBorder` | `#FDE68A` | 경고 경계 |
 | `color.errorSoft` | `#FEF2F2` | 오류 배경 |
 | `color.errorBorder` | `#FECACA` | 오류 경계 |
-| `color.neutralStrong` | `#111827` | 가장 강한 텍스트·아이콘 |
-| `color.neutralSubtle` | `#F1F5F9` | hover, 보조 카드, 코드 배경 |
-| `color.overlay` | `rgba(15, 23, 42, 0.48)` | 모달 backdrop |
-| `color.focus` | `#2563EB` | 키보드 포커스 링 |
+| `color.neutralStrong` | `#16181D` | 가장 강한 텍스트·아이콘 |
+| `color.neutralSubtle` | `#E9ECEF` | hover, 보조 카드, 코드 배경 |
+| `color.overlay` | `rgba(22, 24, 29, 0.48)` | 모달 backdrop |
+| `color.focus` | `#1E3A8A` | 키보드 포커스 링 |
 
 #### Color usage rules
 
-- 한 화면에서 채워진 코랄 버튼은 원칙적으로 한 개만 가장 강한 행동에 사용한다.
-- 코랄은 평가 상태·오류·진행 상태 의미로 재사용하지 않는다.
-- 코랄 버튼 텍스트는 반드시 `#111827`을 쓴다. 흰색을 쓰지 않는다.
-- 링크 본문은 `color.info`; 브랜드 링크나 선택된 탐색 항목만 코랄을 쓴다.
+- 한 화면에서 채워진 딥 차콜 버튼은 원칙적으로 한 개만 가장 강한 행동에 사용한다.
+- Ink blue는 진행 상태, 링크, focus, 선택 강조에 사용하고 넓은 패널 배경으로 사용하지 않는다.
+- 딥 차콜 버튼 텍스트와 아이콘은 반드시 `#F8F9FA`를 쓴다.
+- 활성 내비게이션은 Cool gray 배경과 Ink blue 표시선 또는 아이콘을 함께 사용한다.
+- 성공·경고·오류 의미에 딥 차콜이나 Ink blue를 대신 사용하지 않는다.
 - 긴 본문을 `color.muted`로 표시하지 않는다.
 - Surface 위 기본 텍스트는 `color.body`, 제목은 `color.heading`을 사용한다.
 
@@ -195,8 +200,8 @@ Pretendard를 프로젝트에 포함하지 않았다면 네트워크 폰트를 �
 | `radius.md` | 8px | 입력, 버튼, 메시지 카드 |
 | `radius.lg` | 12px | 패널, 모달, 주요 카드 |
 | `radius.full` | 9999px | 상태 점, pill 배지 |
-| `border.default` | `1px solid #E5E7EB` | 기본 구분 |
-| `border.strong` | `1px solid #CBD5E1` | 입력 hover, 선택 가능 영역 |
+| `border.default` | `1px solid #E9ECEF` | 패널·카드 기본 구분 |
+| `border.strong` | `1px solid #C3C8CF` | 입력, hover, 선택 가능 영역 |
 | `shadow.sm` | `0 1px 2px rgba(15,23,42,.06)` | 떠 있는 메뉴, sticky 분리 |
 | `shadow.md` | `0 8px 24px rgba(15,23,42,.10)` | 모달·팝오버 전용 |
 
@@ -779,15 +784,15 @@ API가 신뢰 가능한 집계를 제공할 때만 다음 4개를 표시한다.
 
 변형:
 
-- Primary: `#FF6347` background, `#111827` foreground, hover `#E64F37`.
+- Primary: `#16181D` background, `#F8F9FA` foreground, hover `#2B2E34`.
 - Secondary: Surface, Body text, Border; hover Neutral Subtle.
 - Tertiary: transparent, Body; hover Neutral Subtle.
 - Danger: Surface, Error text, Error border. 파괴적 행동 확인 modal에서만 사용.
-- Disabled: `#F1F5F9` background, `#94A3B8` text, cursor not-allowed. tooltip만으로 이유를 전달하지 말고 주변 설명 제공.
+- Disabled: `#E9ECEF` background, `#6B7280` text, cursor not-allowed. tooltip만으로 이유를 전달하지 말고 주변 설명 제공.
 
 상태:
 
-- focus-visible: `0 0 0 3px rgba(37,99,235,.28)`.
+- focus-visible: `0 0 0 3px rgba(30,58,138,.28)`.
 - active: `transform: translateY(1px)` 허용. reduced motion에서는 제거.
 - loading: 좌측 16px spinner + 동작형 레이블. 폭 변화 방지를 위해 최소 너비 유지.
 
@@ -795,7 +800,7 @@ API가 신뢰 가능한 집계를 제공할 때만 다음 4개를 표시한다.
 
 - 높이 40px, textarea 최소 96px.
 - padding 10px 12px.
-- border default, hover `#CBD5E1`, focus `color.focus` 2px.
+- 입력 border는 `#C3C8CF`, hover도 동일 색을 유지하고 focus에서 `color.focus` 2px를 적용한다.
 - 레이블은 입력 위에 두고 placeholder로 대체하지 않는다.
 - help text와 error text를 동일 위치에 표시한다.
 - error: border Error + 아이콘 + 문구. 입력값은 유지한다.
@@ -1031,7 +1036,7 @@ API가 신뢰 가능한 집계를 제공할 때만 다음 4개를 표시한다.
 ### 9.1 Contrast
 
 - 일반 텍스트 WCAG AA 4.5:1 이상, 큰 텍스트 3:1 이상을 목표로 한다.
-- `#FF6347` 배경에는 `#111827` 텍스트를 사용한다.
+- `#16181D` 배경에는 `#F8F9FA` 텍스트를 사용한다.
 - Muted text는 흰 배경에서 작은 장문 본문에 사용하지 않는다.
 - focus indicator와 컴포넌트 경계는 인접 색 대비 3:1을 목표로 한다.
 
@@ -1085,33 +1090,34 @@ API가 신뢰 가능한 집계를 제공할 때만 다음 4개를 표시한다.
 
 ```css
 :root {
-  --color-primary: #ff6347;
-  --color-primary-hover: #e64f37;
-  --color-primary-soft: #fff0ec;
-  --color-on-primary: #111827;
-  --color-heading: #253247;
-  --color-body: #334155;
-  --color-muted: #64748b;
-  --color-background: #f8f9fc;
+  --color-primary: #16181d;
+  --color-primary-hover: #2b2e34;
+  --color-primary-soft: #e9ecef;
+  --color-on-primary: #f8f9fa;
+  --color-accent: #1e3a8a;
+  --color-heading: #16181d;
+  --color-body: #16181d;
+  --color-muted: #6b7280;
+  --color-background: #f8f9fa;
   --color-surface: #ffffff;
-  --color-border: #e5e7eb;
-  --color-border-strong: #cbd5e1;
-  --color-neutral-strong: #111827;
-  --color-neutral-subtle: #f1f5f9;
+  --color-border: #e9ecef;
+  --color-border-strong: #c3c8cf;
+  --color-neutral-strong: #16181d;
+  --color-neutral-subtle: #e9ecef;
   --color-success: #16a34a;
   --color-success-soft: #f0fdf4;
   --color-success-border: #bbf7d0;
-  --color-info: #2563eb;
-  --color-info-soft: #eff6ff;
-  --color-info-border: #bfdbfe;
+  --color-info: #1e3a8a;
+  --color-info-soft: #eef2ff;
+  --color-info-border: #c7d2fe;
   --color-warning: #d97706;
   --color-warning-soft: #fffbeb;
   --color-warning-border: #fde68a;
   --color-error: #dc2626;
   --color-error-soft: #fef2f2;
   --color-error-border: #fecaca;
-  --color-focus: #2563eb;
-  --color-overlay: rgba(15, 23, 42, 0.48);
+  --color-focus: #1e3a8a;
+  --color-overlay: rgba(22, 24, 29, 0.48);
 
   --font-sans: Pretendard, "Noto Sans KR", Inter, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1270,8 +1276,8 @@ type SaveState =
 
 ### 10.8 Visual QA checklist
 
-- [ ] Primary와 Primary Hover가 지정값과 일치한다.
-- [ ] 코랄 버튼 글자는 `#111827`이다.
+- [ ] 메인 6색 Cool gray + Ink blue 팔레트가 지정값과 일치한다.
+- [ ] Primary 버튼은 `#16181D`, 글자는 `#F8F9FA`, 진행·선택 강조는 `#1E3A8A`이다.
 - [ ] 그라데이션이 없다.
 - [ ] 일반 카드에 과한 그림자가 없다.
 - [ ] 지원자 화면에 점수·역량·관리자 지표가 없다.
