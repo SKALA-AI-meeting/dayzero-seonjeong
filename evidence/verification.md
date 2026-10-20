@@ -24,10 +24,10 @@
 | AT-04 | PASS | `smoke_flow` 분담 조정 1회·확정 | 조정 최대 3회, 확정 담당 태스크 반영, 동료 담당 섹션별 delegation/run 생성 |
 | AT-05 | PASS | `smoke_flow`, `scripts/smoke_card_revise.py` 7/7 | 승인 전 무변경, 거절 무변경, 승인 후 revision 1개, 중복 승인 무해, 다른 결정 409, 재수정 요청 시 미반영 + 새 카드 |
 | AT-06 | PARTIAL | 섹션 단위 stale 판정 코드·smoke 경로 | 확인 대기 중 대상 섹션 변경 시 APPROVAL_STALE 구현. **자동 테스트로 직접 재현은 안 함.** 사용자 결정으로 지원자 담당 섹션도 채팅으로 명시 요청하면 동료가 수정안을 낼 수 있음(승인 필수) — 기존 OUT_OF_SCOPE 기대와 다름 |
-| AT-07 | PASS | `smoke_flow` 제출·02:00 자동 제출 | snapshot 고정, 리포트 5영역 OBSERVED·근거 메시지와 시각, 분담 이력, score/grade/rank/pass/fail 없음, 디브리핑 7개 상황 |
+| AT-07 | PASS | `smoke_flow` 제출·02:00 자동 제출 | snapshot 고정, 리포트 5영역 OBSERVED·근거 메시지와 시각, 분담 이력, score/grade/rank/pass/fail 없음, 디브리핑 7개 상황. live에서 LLM_WITH_RULES(관찰 영역에만 'AI 추정' 해석·후속 확인점, 판정 표현 차단) |
 | AT-08 | PASS | `evidence/at08_restart_resume.md` | agent 프로세스 종료·재기동 후 승인 대기 복원, 같은 thread_id로 재개, revision 1개·receipt 1개, 승인 2회 전송에도 중복 없음 |
 | AT-09 | PASS | M1 검증(프록시 경유 curl), 브라우저 실사용 | Last-Event-ID 재접속 시 이후 seq만 재전송, 타 세션 404. 15시 이후 SYSTEM_NOTICE/DOCUMENTS_UPDATED 구독 누락 수정 |
-| AT-10 | PARTIAL | `evals/results/harness-v1-baseline.json` H-REC | 재시도 로직(429 두 번 후 성공 3회, 503 지속 3회 후 실패, 비재시도 1회) 검증. **실제 LLM에 429/503 주입, 리포트 LLM 실패 주입은 NOT_RUN.** 리포트는 현재 규칙 기반(RULES_FALLBACK)만 생성 |
+| AT-10 | PARTIAL | `evals/results/harness-v1-baseline.json` H-REC | 재시도 로직(429 두 번 후 성공 3회, 503 지속 3회 후 실패, 비재시도 1회) 검증. 리포트 해석 실패 시 규칙 기반(RULES_FALLBACK) 유지 경로 구현. **실제 LLM에 429/503 주입, 리포트 LLM 실패 주입은 NOT_RUN** |
 | AT-11 | PASS | `test_m0_auth.py`, `smoke_flow` | 타 세션 404, 지원자 관리자 API·리포트 403, 내부 API 쿠키 호출 차단, extra 필드 422 |
 | AT-12 | PASS | `test_m0_auth.py`, `smoke_flow`, `smoke_mcp` | 초대 재사용 409·만료 410, 제출 후 쓰기 409, 승인 없는 변경 도구 거절, 초대 토큰 URL에서 즉시 제거·해시 저장 |
 | AT-13 | PASS | `smoke_flow`(시연 시간 이동) | 9개 이벤트 정시·1회, 인터뷰 01:05 전 열람·검색·도구 차단, 01:10 변경 반영, 01:30 오류는 지적 시에만 정정(ERROR_CORRECTED), 시연 기능은 관리자 화면에만 |
@@ -50,7 +50,7 @@ uv run python -m scripts.restart_resume prepare   # → agent 재시작 → deci
 
 ## 알려진 한계
 
-- 리포트의 LLM 해석(LLM_WITH_RULES)은 미구현이며 규칙 기반 사실 리포트만 생성한다(화면에 명시).
+- 리포트 LLM 해석은 live 모드에서만 생성되며(fixture는 RULES_FALLBACK), 해석은 'AI 추정'으로 사실과 분리 표시된다.
 - live 동료 초안의 출처 표기가 가끔 부정확하다. 지원자가 확인 카드에서 검토한다.
 - Docker Compose(`compose.yaml`)는 작성했지만 컨테이너 빌드·기동은 실행하지 않았다(NOT_RUN). 검증은 로컬 프로세스 기준이다.
 - 대기열(RabbitMQ) 가산점, 다중 시나리오 등 P1 항목은 하지 않았다.

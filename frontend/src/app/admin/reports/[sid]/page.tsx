@@ -12,7 +12,7 @@ type Ref = { kind: string; id: string; quote: string | null };
 type Fact = { text: string; at?: string | null; created_at?: string; event_id?: string; refs: Ref[] };
 type Situation = { event_id: string | null; situation: string; status: string; at: string | null };
 type Area = { dimension: string; label: string; status: string; situations: Situation[]; facts: Fact[]; limits: string;
-  interpretation: { text: string; label: string } | null; usage?: Record<string, number> };
+  interpretation: { text: string; label: string } | null; follow_up?: string; usage?: Record<string, number> };
 type Body = {
   generation_mode: string; policy_version: string; scenario_id: string; submitted_by: string;
   timeline: { event_id: string; at: string; situation: string }[];
@@ -118,6 +118,7 @@ export default function ReportPage() {
                   </dd>
                   <dt>제한된 해석</dt>
                   <dd className="interp">{a.interpretation ? <><span className="badge info">AI 추정</span> {a.interpretation.text}</> : <span className="small">규칙 기반 리포트라 해석을 생성하지 않았습니다. 원문 근거를 보고 판단해 주세요.</span>}</dd>
+                  {a.follow_up && <><dt>후속 확인점</dt><dd className="small">{a.follow_up}</dd></>}
                   <dt>한계</dt>
                   <dd className="limits small">{a.limits}</dd>
                 </dl>

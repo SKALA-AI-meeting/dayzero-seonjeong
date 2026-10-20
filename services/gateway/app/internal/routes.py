@@ -630,3 +630,42 @@ def followup(rid: str, body: FollowupIn):
             record_action(c, sid, "COLLEAGUE", "REVISION_STARTED", str(t["id"]), {"section": sec, "via": "chat"})
             created.append(sec)
     return {"created": created, "skipped": skipped}
+
+
+
+@router.get("/reports/{sid}/body")
+def report_body(sid: str):
+    with tx(dsn()) as c:
+        rep = one(c, "SELECT body FROM reports WHERE session_id=%s", (sid,))
+    if not rep or not rep["body"]:
+        raise ApiError(404, "NOT_FOUND", "리포트 없음")
+    return {"body": rep["body"]}
+
+
+class InterpretIn(Strict):
+    report_id: str
+    interpretations: dict[str, dict]
+
+
+@router.post("/reports/{sid}/interpret")
+def report_interpret(sid: str, body: InterpretIn):
+    """LLM 제한 해석을 관찰된 영역에만 병합. 사실·근거는 바꾸지 않는다."""
+    with tx(dsn()) as c:
+        rep = one(c, "SELECT * FROM reports WHERE id=%s AND session_id=%s FOR UPDATE", (body.report_id, sid))
+        if not rep or not rep["body"]:
+            raise ApiError(404, "NOT_FOUND", "리포트 없음")
+        b = dict(rep["body"])
+        n = 0
+        for a in b["areas"]:
+            it = body.interpretations.get(a["dimension"])
+            if it and a["status"] == "OBSERVED":
+                a["interpretation"] = {"text": str(it.get("text", ""))[:400], "label": "INFERENCE"}
+                if it.get("follow_up"):
+                    a["follow_up"] = str(it["follow_up"])[:300]
+                n += 1
+        if n:
+            b["generation_mode"] = "LLM_WITH_RULES"
+            b["limitations"] = [x for x in b["limitations"] if "RULES_FALLBACK" not in x] + [
+                "제한된 해석은 AI 추정이며 사실 근거(원문 ID)와 분리해 표시함"]
+            c.execute("UPDATE reports SET body=%s, attempts=attempts+1 WHERE id=%s", (J(b), rep["id"]))
+    return {"interpreted": n}
