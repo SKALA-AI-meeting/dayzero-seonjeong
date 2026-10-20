@@ -1,0 +1,657 @@
+{
+ "phase": [
+  {
+   "case": "분업 제안(run.type=split)",
+   "want": "negotiate",
+   "got": "negotiate",
+   "ok": true
+  },
+  {
+   "case": "E0 중 채팅",
+   "want": "work",
+   "got": "work",
+   "ok": true
+  },
+  {
+   "case": "E2 팀장에게 질문",
+   "want": "work",
+   "got": "work",
+   "ok": true
+  },
+  {
+   "case": "E4 보고(팀장, REPORT)",
+   "want": "briefing",
+   "got": "briefing",
+   "ok": true
+  },
+  {
+   "case": "E4 후속 답(팀장, FOLLOW_UP)",
+   "want": "briefing",
+   "got": "briefing",
+   "ok": true
+  },
+  {
+   "case": "E4 중 서윤에게",
+   "want": "work",
+   "got": "work",
+   "ok": true
+  },
+  {
+   "case": "E4 종료 후 팀장에게",
+   "want": "work",
+   "got": "work",
+   "ok": true
+  }
+ ],
+ "work": [
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "지금 바로 같이 볼게요. 어디가 헷갈리세요?",
+   "want": [
+    "HELP_NOW"
+   ],
+   "live": "HELP_NOW",
+   "fixture": "HELP_NOW",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "안내문 끝내고 11시쯤 같이 볼게요.",
+   "want": [
+    "HELP_LATER_WITH_TIME"
+   ],
+   "live": "HELP_LATER_WITH_TIME",
+   "fixture": "HELP_LATER_WITH_TIME",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "지금은 FAQ 마감 때문에 어려울 것 같아요. 죄송해요.",
+   "want": [
+    "DECLINE_WITH_REASON"
+   ],
+   "live": "DECLINE_WITH_REASON",
+   "fixture": "HELP_NOW",
+   "live_ok": true,
+   "fixture_ok": false,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "애매한 표현",
+   "text": "음… 글쎄요.",
+   "want": [
+    "NONE"
+   ],
+   "live": "NONE",
+   "fixture": "NONE",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "무관한 말",
+   "text": "오늘 점심 뭐 먹을까요?",
+   "want": [
+    "NONE"
+   ],
+   "live": "NONE",
+   "fixture": "NONE",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "심어둔 오류 언급",
+   "text": "표 일정이 11/2 ~ 11/31인데 11월은 30일까지라 없는 날짜예요. 브리프대로 고쳐주실 수 있을까요?",
+   "want": [
+    "SPECIFIC_CORRECTION"
+   ],
+   "live": "SPECIFIC_CORRECTION",
+   "fixture": "SPECIFIC_CORRECTION",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "애매한 표현",
+   "text": "표가 좀 이상한 것 같아요.",
+   "want": [
+    "VAGUE_CRITICISM"
+   ],
+   "live": "VAGUE_CRITICISM",
+   "fixture": "VAGUE_CRITICISM",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "비난",
+   "text": "왜 이렇게 대충 하셨어요? 다 틀렸잖아요.",
+   "want": [
+    "HARSH_BLAME"
+   ],
+   "live": "VAGUE_CRITICISM",
+   "fixture": "HARSH_BLAME",
+   "live_ok": false,
+   "fixture_ok": true,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E1",
+   "to": "COLLEAGUE",
+   "kind": "사실과 다른 지적",
+   "text": "제외 대상이 '동일 결제수단 계정'으로 돼 있는데 그거 잘못된 것 같아요.",
+   "want": [
+    "WRONG_CRITICISM"
+   ],
+   "live": "SPECIFIC_CORRECTION",
+   "fixture": "SPECIFIC_CORRECTION",
+   "live_ok": false,
+   "fixture_ok": false,
+   "allowed": [
+    "HELP_NOW",
+    "HELP_LATER_WITH_TIME",
+    "DECLINE_WITH_REASON",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E2",
+   "to": "MANAGER",
+   "kind": "정상 응답",
+   "text": "팀장님, 피초대자도 첫 결제를 해야 2,000P를 받나요?",
+   "want": [
+    "CLARIFYING_QUESTION"
+   ],
+   "live": "CLARIFYING_QUESTION",
+   "fixture": "CLARIFYING_QUESTION",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "CLARIFYING_QUESTION",
+    "RISK_ESCALATION"
+   ]
+  },
+  {
+   "event": "E2",
+   "to": "MANAGER",
+   "kind": "정상 응답",
+   "text": "푸시까지 하면 17시까지 빠듯할 것 같은데 우선순위 조정이 가능할까요?",
+   "want": [
+    "RISK_ESCALATION"
+   ],
+   "live": "CLARIFYING_QUESTION",
+   "fixture": "RISK_ESCALATION",
+   "live_ok": false,
+   "fixture_ok": true,
+   "allowed": [
+    "CLARIFYING_QUESTION",
+    "RISK_ESCALATION"
+   ]
+  },
+  {
+   "event": "E2",
+   "to": "MANAGER",
+   "kind": "애매한 표현",
+   "text": "넵 알겠습니다.",
+   "want": [
+    "NONE"
+   ],
+   "live": "NONE",
+   "fixture": "NONE",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "CLARIFYING_QUESTION",
+    "RISK_ESCALATION"
+   ]
+  },
+  {
+   "event": "E2",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "푸시 문구는 서윤 씨가 맡아 주시고 저는 FAQ를 마무리할게요. 보드도 바꿔둘게요.",
+   "want": [
+    "REPLAN_OR_RESPLIT"
+   ],
+   "live": "REPLAN_OR_RESPLIT",
+   "fixture": "REPLAN_OR_RESPLIT",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "REPLAN_OR_RESPLIT",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E2",
+   "to": "COLLEAGUE",
+   "kind": "변경 반영 요청",
+   "text": "서윤 씨 표에도 피초대자 2,000P 반영 부탁드려요.",
+   "want": [
+    "OUT_OF_SCOPE_REQUEST",
+    "SPECIFIC_CORRECTION"
+   ],
+   "live": "SPECIFIC_CORRECTION",
+   "fixture": "SPECIFIC_CORRECTION",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "REPLAN_OR_RESPLIT",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "수고하셨어요!",
+   "want": [
+    "ACCEPT_AS_DONE"
+   ],
+   "live": "ACCEPT_AS_DONE",
+   "fixture": "ACCEPT_AS_DONE",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "SPECIFIC_CORRECTION",
+    "ACCEPT_AS_DONE",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "kind": "반문 뒤 재요청",
+   "text": "표랑 FAQ는 서윤 씨 담당이라서요. 팀장님이 전부 반영해 달라고 하셨어요.",
+   "want": [
+    "REQUEST_REPEATED_WITH_REASON"
+   ],
+   "live": "OUT_OF_SCOPE_REQUEST",
+   "fixture": "REQUEST_REPEATED_WITH_REASON",
+   "live_ok": false,
+   "fixture_ok": true,
+   "allowed": [
+    "SPECIFIC_CORRECTION",
+    "REQUEST_REPEATED_WITH_REASON",
+    "GIVE_UP_AND_FIX_SELF",
+    "ACCEPT_AS_DONE",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E2B",
+   "to": "COLLEAGUE",
+   "kind": "반문 뒤 포기",
+   "text": "아 그럼 그냥 제가 할게요.",
+   "want": [
+    "GIVE_UP_AND_FIX_SELF"
+   ],
+   "live": "GIVE_UP_AND_FIX_SELF",
+   "fixture": "GIVE_UP_AND_FIX_SELF",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "SPECIFIC_CORRECTION",
+    "REQUEST_REPEATED_WITH_REASON",
+    "GIVE_UP_AND_FIX_SELF",
+    "ACCEPT_AS_DONE",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E3",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "급하신 거 알겠어요. 제가 이어서 할 부분이 어디예요?",
+   "want": [
+    "HANDOVER_QUESTION"
+   ],
+   "live": "HANDOVER_QUESTION",
+   "fixture": "HANDOVER_QUESTION",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HANDOVER_QUESTION",
+    "TAKE_OVER_AND_NOTIFY",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E3",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답",
+   "text": "다녀오세요. 표 피초대자 칸은 제가 채워둘게요.",
+   "want": [
+    "TAKE_OVER_AND_NOTIFY"
+   ],
+   "live": "TAKE_OVER_AND_NOTIFY",
+   "fixture": "TAKE_OVER_AND_NOTIFY",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "HANDOVER_QUESTION",
+    "TAKE_OVER_AND_NOTIFY",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "kind": "정상 응답(live 흐름 실패 문장)",
+   "text": "네, 브리프랑 달라서 금액을 3,000P로 맞춰뒀어요. 확인 부탁해요.",
+   "want": [
+    "SOLUTION_FOCUSED_SHARE"
+   ],
+   "live": "SPECIFIC_CORRECTION",
+   "fixture": "SOLUTION_FOCUSED_SHARE",
+   "live_ok": false,
+   "fixture_ok": true,
+   "allowed": [
+    "SOLUTION_FOCUSED_SHARE",
+    "BLAME_FOCUSED",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "kind": "비난",
+   "text": "금액이 완전히 틀렸던데 왜 브리프 안 보셨어요?",
+   "want": [
+    "BLAME_FOCUSED",
+    "HARSH_BLAME"
+   ],
+   "live": "WRONG_CRITICISM",
+   "fixture": "BLAME_FOCUSED",
+   "live_ok": false,
+   "fixture_ok": true,
+   "allowed": [
+    "SOLUTION_FOCUSED_SHARE",
+    "BLAME_FOCUSED",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  },
+  {
+   "event": "E3B",
+   "to": "COLLEAGUE",
+   "kind": "무관한 말",
+   "text": "주말에 뭐 하세요?",
+   "want": [
+    "NONE"
+   ],
+   "live": "NONE",
+   "fixture": "NONE",
+   "live_ok": true,
+   "fixture_ok": true,
+   "allowed": [
+    "SOLUTION_FOCUSED_SHARE",
+    "BLAME_FOCUSED",
+    "SPECIFIC_CORRECTION",
+    "VAGUE_CRITICISM",
+    "OUT_OF_SCOPE_REQUEST",
+    "WRONG_CRITICISM",
+    "HARSH_BLAME"
+   ]
+  }
+ ],
+ "briefing": [
+  {
+   "stage": "REPORT",
+   "text": "안내문·표는 정리했고 푸시 문구는 아직 진행 중입니다. 표·FAQ 초안은 서윤 씨가 만들었어요.",
+   "want": [
+    "HO+1",
+    "HO+2"
+   ],
+   "got": [
+    "HO+1",
+    "HO+2"
+   ],
+   "ok": true
+  },
+  {
+   "stage": "REPORT",
+   "text": "전부 다 끝났습니다. 문제 없어요.",
+   "want": [
+    "HO-1"
+   ],
+   "got": [
+    "HO-1"
+   ],
+   "ok": true
+  },
+  {
+   "stage": "FOLLOW_UP",
+   "text": "아니요, 초안은 서윤 씨가 썼고 저는 검토만 했어요.",
+   "want": [
+    "HO+3"
+   ],
+   "got": [
+    "HO+3"
+   ],
+   "ok": true
+  },
+  {
+   "stage": "FOLLOW_UP",
+   "text": "네, 제가 다 정리했어요.",
+   "want": [
+    "HO-2"
+   ],
+   "got": [
+    "HO-2"
+   ],
+   "ok": true
+  }
+ ],
+ "negotiate": [
+  {
+   "proposal": {
+    "T1": "CANDIDATE",
+    "T3": "COLLEAGUE",
+    "faq_candidate": 3
+   },
+   "want": [
+    "BALANCED_SPLIT",
+    true,
+    [
+     "CO+1"
+    ]
+   ],
+   "got": [
+    "BALANCED_SPLIT",
+    true,
+    [
+     "CO+1"
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "proposal": {
+    "T1": "CANDIDATE",
+    "T3": "COLLEAGUE",
+    "faq_candidate": 0
+   },
+   "want": [
+    "ONE_SIDED_SPLIT",
+    false,
+    []
+   ],
+   "got": [
+    "ONE_SIDED_SPLIT",
+    false,
+    []
+   ],
+   "ok": true
+  },
+  {
+   "proposal": {
+    "T1": "CANDIDATE",
+    "T3": "COLLEAGUE",
+    "faq_candidate": 0
+   },
+   "want": [
+    "ONE_SIDED_SPLIT",
+    true,
+    [
+     "CO-2"
+    ]
+   ],
+   "got": [
+    "ONE_SIDED_SPLIT",
+    true,
+    [
+     "CO-2"
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "proposal": {
+    "T1": "CANDIDATE",
+    "T3": "CANDIDATE",
+    "faq_candidate": 5
+   },
+   "want": [
+    "TAKE_ALL",
+    false,
+    []
+   ],
+   "got": [
+    "TAKE_ALL",
+    false,
+    []
+   ],
+   "ok": true
+  }
+ ]
+}

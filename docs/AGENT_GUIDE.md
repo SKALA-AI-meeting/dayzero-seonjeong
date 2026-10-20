@@ -61,7 +61,7 @@ live 모드: `.env`에 `LLM_MODE=live`, `OPENAI_API_KEY`를 넣고 `LLM_MODE=liv
 | AT-14 | Harness 8요소 | harness-v1 8개 PASS | eval_harness |
 | AT-15 | 디브리핑 | 연출 안내 문구, 소감 1회 저장, 리포트에 병합 | smoke_flow, ui_check |
 | AT-16 | 대기열 제거 | `infra/check-no-queue.sh` 0건(lock 파일 제외), DB 컨테이너만으로 전체 기동 | check-no-queue, dev-up |
-| AT-17 | 실제 LLM 1회 시연 | live 모드로 E0→E4 한 번 진행, 분류·페르소나 응답·리포트 요약 확인 | 수동(키 필요) |
+| AT-17 | 실제 LLM 1회 시연 | live 모드로 E0→E4 한 번 진행, 분류·페르소나 응답·리포트 요약 확인 | smoke_flow --mode live, scripts.classify_check(키 필요) |
 
 ## 4. 인계 체크
 
