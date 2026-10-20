@@ -13,9 +13,10 @@ from shared.config import SECTION_IDS, settings
 from shared.db import J, all_, one, tx
 
 from ..auth import Principal, candidate, principal
-from ..domain import (CANDIDATE_ACTIONS, active_run, approval_dto, artifact_dto, create_run, emit,
-                      enqueue_policy_check, insert_message, list_tasks, lock_session, message_dto, now,
-                      read_session, record_action, run_dto, session_dto, task_dto)
+from ..domain import (active_run, approval_dto, artifact_dto, create_run, elapsed_min, emit, hidden_document_ids,
+                      insert_message, list_tasks, lock_session, message_dto, read_session, record_action, run_dto,
+                      session_dto, task_dto)
+from ..timeline import fire_due
 from ..errors import ApiError
 
 router = APIRouter()
@@ -47,7 +48,7 @@ class EvidenceRef(Strict):
 
 class ArtifactPatchIn(Strict):
     base_version: int
-    section: Literal["problem", "evidence", "options", "experiment", "risks"]
+    section: Literal["problem", "interview_evidence", "features", "similar_cases", "metrics_timeline"]
     content: str = Field(max_length=MAX_ARTIFACT_CHARS)
     source_refs: list[EvidenceRef] = Field(default_factory=list, max_length=20)
 
@@ -67,10 +68,18 @@ def snapshot(c, sid: str, s: dict) -> dict:
                    "ORDER BY created_at", (sid,))
     approvals = all_(c, "SELECT * FROM approvals WHERE session_id=%s AND status='PENDING' ORDER BY created_at", (sid,))
     brief = one(c, "SELECT public_brief, title FROM scenarios WHERE id=%s", (s["scenario_id"],))
+    split = (s["policy_state"] or {}).get("split")
+    em = elapsed_min(s)
     return {"session": session_dto(s), "artifact": artifact_dto(art) if art else None,
             "tasks": list_tasks(c, sid), "messages": [message_dto(m) for m in msgs],
-            "active_run": run_dto(active_run(c, sid)), "approvals": [approval_dto(a) for a in approvals],
-            "brief": {"title": brief["title"], **brief["public_brief"]}, "mode": settings().llm_mode}
+            "active_run": run_dto(active_run(c, sid)),
+            "active_runs": [run_dto(r) for r in all_(c, """SELECT * FROM runs WHERE session_id=%s AND kind<>'REPORT'
+                                                       AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')""", (sid,))],
+            "approvals": [approval_dto(a) for a in approvals],
+            "brief": {"title": brief["title"], **brief["public_brief"]}, "mode": settings().llm_mode,
+            "clock": {"elapsed_min": round(em, 2), "duration_min": brief["public_brief"]["duration_minutes"],
+                      "remaining_min": max(0.0, round(brief["public_brief"]["duration_minutes"] - em, 2))},
+            "split": {k: split[k] for k in ("assignments", "adjustments_used", "confirmed")} if split else None}
 
 
 @router.get("/sessions/{sid}")
@@ -94,13 +103,10 @@ def start(sid: str, body: StartIn, p: Principal = Depends(candidate)):
         for t in sc["task_templates"]:
             c.execute("INSERT INTO tasks(session_id,title,status,owner,template_key,target_section) "
                       "VALUES (%s,%s,'TODO','CANDIDATE',%s,%s)", (sid, t["title"], t["key"], t["key"]))
-        record_action(c, sid, "CANDIDATE", "CONSENTED", payload={"items": ["observation", "ai_log", "human_judgement",
+        record_action(c, sid, "CANDIDATE", "CONSENTED", payload={"items": ["behavior_log", "ai_log", "human_judgement",
                                                                          "demo_retention"]})
-        kickoff = (f"안녕하세요, 팀장 {sc['manager']}입니다. 오늘 과제를 공유드립니다.\n\n{sc['public_brief']}\n\n"
-                   f"자료 패널의 기본 자료 6개를 먼저 확인해 주세요. 동료 {sc['colleague']} 님께 조사와 정리를 "
-                   f"부탁할 수 있지만, 문제 정의·우선순위·최종 기획안은 직접 결정해 주세요.")
-        m = insert_message(c, sid, "TEAM", "MANAGER", kickoff, meta={"kind": "KICKOFF"})
-        emit(c, sid, "MANAGER_EVENT", {"message_id": str(m["id"]), "content": kickoff, "citations": []})
+        s = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
+        fire_due(c, s)  # 00:00 킥오프(팀장 브리프 + 동료 인사)
         s = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
     return {"session": session_dto(s)}
 
@@ -114,20 +120,20 @@ def post_message(sid: str, body: MessageIn, p: Principal = Depends(candidate)):
         if dup:
             run = one(c, "SELECT id FROM runs WHERE source_message_id=%s", (dup["id"],))
             return {"message_id": str(dup["id"]), "run_id": str(run["id"]) if run else None}
-        busy = active_run(c, sid)
-        if busy and busy["kind"] != "REPORT":
+        busy = one(c, """SELECT id FROM runs WHERE session_id=%s AND kind=%s
+                          AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL') LIMIT 1""",
+                   (sid, "ASSISTANT" if body.channel == "ASSISTANT" else "COLLEAGUE"))
+        if busy:
             raise ApiError(409, "RUN_BUSY", "동료가 다른 요청을 처리 중입니다. 완료 또는 승인 결정 후 다시 보내 주세요")
         m = insert_message(c, sid, body.channel, "CANDIDATE", body.content, client_message_id=body.client_message_id)
         seq = record_action(c, sid, "CANDIDATE", "MESSAGE_SENT", str(m["id"]), {"channel": body.channel})
         kind = "ASSISTANT" if body.channel == "ASSISTANT" else "COLLEAGUE"
         run = create_run(c, sid, kind, source_message_id=str(m["id"]),
                          input_={"message_id": str(m["id"]), "content": body.content, "channel": body.channel},
-                         prompt_version="assistant-v1" if kind == "ASSISTANT" else "colleague-v1")
+                         prompt_version="assistant-v2" if kind == "ASSISTANT" else "colleague-v2")
         c.execute("UPDATE messages SET source_run_id=%s WHERE id=%s", (run["id"], m["id"]))
         emit(c, sid, "CANDIDATE_MESSAGE", {"message_id": str(m["id"]), "channel": body.channel,
                                            "content": body.content}, run_id=str(run["id"]))
-        if body.channel == "TEAM":
-            enqueue_policy_check(c, sid, seq)
     return {"message_id": str(m["id"]), "run_id": str(run["id"])}
 
 
@@ -137,8 +143,14 @@ def list_documents(sid: str, p: Principal = Depends(principal)):
         s = read_session(c, sid, p)
         if p.role == "CANDIDATE" and s["status"] == "CREATED":
             raise ApiError(403, "FORBIDDEN", "동의와 시작 이후에 사용할 수 있습니다")
-        docs = all_(c, "SELECT id,title,version FROM documents WHERE scenario_id=%s ORDER BY id", (s["scenario_id"],))
-    return {"items": docs}
+        docs = all_(c, "SELECT id,title,version FROM documents WHERE scenario_id=%s", (s["scenario_id"],))
+        hidden = set(hidden_document_ids(c, s)) if p.role == "CANDIDATE" else set()
+        delayed = bool(one(c, "SELECT 1 FROM event_occurrences WHERE session_id=%s AND event_id='T-DELAY'", (sid,)))
+    order = {d: i for i, d in enumerate(["company-intro", "metrics-status", "user-interviews", "operating-policy", "meeting-notes"])}
+    items = [{**d, "available": d["id"] not in hidden,
+              "notice": ("01:05 공개 예정" if delayed else "아직 공유되지 않음") if d["id"] in hidden else None}
+             for d in sorted(docs, key=lambda d: order.get(d["id"], 99))]
+    return {"items": items}
 
 
 @router.get("/sessions/{sid}/documents/{doc_id}")
@@ -151,14 +163,14 @@ def get_document(sid: str, doc_id: str, p: Principal = Depends(principal)):
                 (doc_id, s["scenario_id"]))
         if not d:
             raise ApiError(404, "NOT_FOUND", "문서를 찾을 수 없습니다")
+        if p.role == "CANDIDATE" and doc_id in hidden_document_ids(c, s):
+            raise ApiError(403, "FORBIDDEN", "아직 공유되지 않은 자료입니다")
         if p.role == "CANDIDATE" and s["status"] == "ACTIVE":
             seen = one(c, "SELECT 1 FROM actions WHERE session_id=%s AND kind='DOCUMENT_OPENED' AND entity_id=%s",
                        (sid, doc_id))
             # Repeat opens of the same document are recorded but count as candidate action only once.
-            seq = record_action(c, sid, "CANDIDATE", "DOCUMENT_OPENED" if not seen else "DOCUMENT_REOPENED", doc_id,
-                                {"version": d["version"]})
-            if not seen:
-                enqueue_policy_check(c, sid, seq)
+            record_action(c, sid, "CANDIDATE", "DOCUMENT_OPENED" if not seen else "DOCUMENT_REOPENED", doc_id,
+                          {"version": d["version"], "elapsed_min": round(elapsed_min(s), 2)})
     return d
 
 
@@ -183,11 +195,10 @@ def patch_artifact(sid: str, body: ArtifactPatchIn, p: Principal = Depends(candi
                         VALUES (%s,%s,%s,%s,%s,'CANDIDATE',%s) RETURNING id""",
                   (sid, art["id"], new_v, J(sections), J([body.section]),
                    J([r.model_dump() for r in body.source_refs])))
-        seq = record_action(c, sid, "CANDIDATE", "ARTIFACT_SAVED", str(rev["id"]),
+        record_action(c, sid, "CANDIDATE", "ARTIFACT_SAVED", str(rev["id"]),
                             {"section": body.section, "version": new_v, "was_empty": was_empty,
                              "length": len(body.content)})
         emit(c, sid, "ARTIFACT_UPDATED", {"version": new_v, "changed_sections": [body.section], "actor": "CANDIDATE"})
-        enqueue_policy_check(c, sid, seq)
     return {"artifact": artifact_dto(art), "changed": True}
 
 
@@ -202,7 +213,7 @@ def patch_task(sid: str, tid: str, body: TaskPatchIn, p: Principal = Depends(can
         t = one(c, "SELECT * FROM tasks WHERE id=%s AND session_id=%s FOR UPDATE", (tid, sid))
         if not t:
             raise ApiError(404, "NOT_FOUND", "태스크를 찾을 수 없습니다")
-        if t["owner"] != "CANDIDATE":
+        if t["owner"] == "COLLEAGUE":
             raise ApiError(403, "FORBIDDEN", "동료 태스크는 검토 API로만 결정할 수 있습니다")
         if t["version"] != body.base_version:
             raise ApiError(409, "VERSION_CONFLICT", "태스크가 이미 변경되었습니다")

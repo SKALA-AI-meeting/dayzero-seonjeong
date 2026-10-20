@@ -37,7 +37,7 @@ class Worker:
         log.info("worker %s started (mode=%s)", WORKER_ID, S.llm_mode)
         while not self.stop.is_set():
             try:
-                job = self.gw.post("/jobs/claim", {"worker_id": WORKER_ID, "kinds": ["AGENT", "POLICY_CHECK", "REPORT"]})["job"]
+                job = self.gw.post("/jobs/claim", {"worker_id": WORKER_ID, "kinds": ["AGENT", "REPORT"]})["job"]
             except Exception as e:  # noqa: BLE001
                 self.last_error = f"claim: {e}"
                 time.sleep(2)
@@ -57,9 +57,6 @@ class Worker:
                     pass
 
     def handle(self, job: dict) -> str:
-        if job["kind"] == "POLICY_CHECK":
-            self.gw.post(f"/sessions/{job['session_id']}/policy-check", {"trigger_action_seq": job["input"].get("trigger_action_seq", 0)})
-            return "DONE"
         if job["kind"] == "REPORT":
             from .report import run_report
             run_report(self.gw, job)
@@ -97,10 +94,21 @@ class Worker:
 _worker: Worker | None = None
 
 
+def _ticker(w: Worker) -> None:
+    """Exam clock: ask the gateway to fire due scenario events (server-owned facts, at most once each)."""
+    while not w.stop.is_set():
+        try:
+            w.gw.post("/timeline/tick", {})
+        except Exception as e:  # noqa: BLE001
+            w.last_error = f"tick: {e}"
+        time.sleep(2)
+
+
 def start() -> Worker:
     global _worker
     _worker = Worker()
     threading.Thread(target=_worker.run_forever, name="job-worker", daemon=True).start()
+    threading.Thread(target=_ticker, args=(_worker,), name="exam-ticker", daemon=True).start()
     return _worker
 
 

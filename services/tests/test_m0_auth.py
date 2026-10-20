@@ -69,7 +69,7 @@ def test_invite_single_use_and_start_idempotent():
         r = c.post(f"/sessions/{sid}/start", json={"consent": True}, headers={"X-CSRF-Token": csrf})
         assert r.status_code == 200 and r.json()["session"]["status"] == "ACTIVE"
     snap = c.get(f"/sessions/{sid}").json()
-    assert [m["actor"] for m in snap["messages"]] == ["MANAGER"]
+    assert [m["actor"] for m in snap["messages"]] == ["MANAGER", "COLLEAGUE"]  # 00:00 킥오프 1회(팀장 브리프 + 동료 인사)
     assert len(snap["tasks"]) == 5 and snap["artifact"]["version"] == 1
 
 

@@ -6,11 +6,11 @@ import { ArtifactEditor } from "@/components/ArtifactEditor";
 import { Chat } from "@/components/Chat";
 import { api, ApiError, loadMe, uuid } from "@/lib/api";
 import { subscribe, type StreamEvent } from "@/lib/events";
-import { TASK_STATUS, type Artifact, type Citation, type DelegationProposal, type Snapshot, type Task } from "@/lib/types";
+import { fmtClock, OWNER_LABEL, TASK_STATUS, type Artifact, type Citation, type Owner, type Snapshot, type Task } from "@/lib/types";
 
-type Doc = { id: string; title: string; version: number; body?: string };
+type Doc = { id: string; title: string; version: number; body?: string; available?: boolean; notice?: string | null };
 const TOOL_NAME: Record<string, string> = {
-  get_funnel_metrics: "퍼널 지표 조회", get_support_cases: "고객 문의 조회", search_docs: "문서 검색",
+  get_rejoin_metrics: "재참여 지표 조회", get_interview_notes: "인터뷰 조회", search_docs: "문서 검색",
   get_session_context: "업무 상태 확인", read_resource: "문서 원문 열람", patch_artifact_section: "기획안 변경", update_task_status: "태스크 상태 변경",
 };
 
@@ -29,7 +29,8 @@ export default function Office() {
   const [conn, setConn] = useState<"open" | "reconnecting">("open");
   const [error, setError] = useState<string | null>(null);
   const [busyApproval, setBusyApproval] = useState(false);
-  const [confirmed] = useState<Set<string>>(new Set());
+  const [now, setNow] = useState(() => Date.now());
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
   const [submitOpen, setSubmitOpen] = useState(false);
   const [reviewComment, setReviewComment] = useState<Record<string, string>>({});
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -38,6 +39,7 @@ export default function Office() {
     try {
       const s = await api<Snapshot>(`/sessions/${sid}`);
       setSnap(s);
+      setLoadedAt(Date.now());
       if (s.session.status === "CREATED") router.replace("/join");
       return s;
     } catch (e) {
@@ -53,12 +55,21 @@ export default function Office() {
   }, [refresh]);
 
   useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const loadDocs = useCallback(() => {
+    api<{ items: Doc[] }>(`/sessions/${sid}/documents`).then((r) => setDocs(r.items)).catch(() => undefined);
+  }, [sid]);
+
+  useEffect(() => {
     let unsub: (() => void) | null = null;
     (async () => {
       await loadMe();
       const s = await refresh();
       if (!s) return;
-      api<{ items: Doc[] }>(`/sessions/${sid}/documents`).then((r) => setDocs(r.items)).catch(() => undefined);
+      loadDocs();
       unsub = subscribe(sid, s.session.last_stream_seq, (e: StreamEvent) => {
         const pl = e.payload as Record<string, unknown>;
         if (e.type === "RUN_STARTED") { setFailedRun(null); setProgress("동료가 요청을 확인하고 있습니다…"); }
@@ -68,11 +79,12 @@ export default function Office() {
         else if (e.type === "DONE") setProgress(null);
         else if (e.type === "FAILED") { setProgress(null); setFailedRun(e.run_id); }
         else if (e.type === "SESSION_DONE") router.push(`/debrief/${sid}`);
+        if (e.type === "DOCUMENTS_UPDATED" || e.type === "SYSTEM_NOTICE") loadDocs();
         scheduleRefresh();
       }, setConn);
     })();
     return () => unsub?.();
-  }, [sid, refresh, scheduleRefresh, router]);
+  }, [sid, refresh, scheduleRefresh, router, loadDocs]);
 
   async function openDocument(id: string, q: string | null = null) {
     try {
@@ -98,15 +110,12 @@ export default function Office() {
     }
   }
 
-  async function confirmDelegation(p: DelegationProposal) {
+  async function decideSplit(decision: "ACCEPT" | "ADJUST", assignments: Record<string, Owner>) {
     try {
-      await api(`/sessions/${sid}/delegations`, {
-        method: "POST", headers: { "Idempotency-Key": uuid() },
-        json: { source_message_id: p.source_message_id, title: p.title, target_section: "evidence", allowed_tools: p.allowed_tools, filters: p.filters },
-      });
+      await api(`/sessions/${sid}/split`, { method: "POST", json: { decision, assignments, comment: "" } });
       scheduleRefresh();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "위임을 만들지 못했습니다");
+      setError(e instanceof ApiError ? e.message : "업무 분담을 저장하지 못했습니다");
     }
   }
 
@@ -124,8 +133,7 @@ export default function Office() {
 
   async function review(t: Task, decision: "ACCEPT" | "REVISE" | "REJECT") {
     try {
-      const refs = (t.result?.citations ?? []).slice(0, 0); // 지원자가 직접 대조한 근거만 첨부 (기본 없음)
-      await api(`/sessions/${sid}/tasks/${t.id}/review`, { method: "POST", json: { decision, comment: reviewComment[t.id] ?? "", source_refs: refs } });
+      await api(`/sessions/${sid}/tasks/${t.id}/review`, { method: "POST", json: { decision, comment: reviewComment[t.id] ?? "", source_refs: [] } });
       scheduleRefresh();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "검토 결과를 저장하지 못했습니다");
@@ -169,9 +177,11 @@ export default function Office() {
 
   const submitted = snap.session.status === "SUBMITTED";
   const emptySections = Object.entries(snap.artifact.sections).filter(([, v]) => !v.trim()).map(([k]) => k);
-  const run = snap.active_run;
-  const busy = !!run && ["QUEUED", "RUNNING", "WAITING_APPROVAL"].includes(run.status);
-  const proposalsDone = new Set(snap.messages.filter((m) => m.meta?.delegation_proposal && snap.tasks.some((t) => t.owner === "COLLEAGUE" && t.title === m.meta.delegation_proposal!.title)).map((m) => m.id));
+  const run = snap.active_runs.find((r) => r.kind === (chatTab === "TEAM" ? "COLLEAGUE" : "ASSISTANT") && ["QUEUED", "RUNNING"].includes(r.status));
+  const busy = !!run;
+  const splitMsgs = snap.messages.filter((m) => m.meta?.split_proposal);
+  const activeSplitMessageId = splitMsgs.length ? splitMsgs[splitMsgs.length - 1].id : null;
+  const remaining = Math.max(0, snap.clock.remaining_min - (submitted ? 0 : (now - loadedAt) / 60000));
   const highlightDoc = (body: string) => {
     if (!quote) return body;
     const i = body.indexOf(quote);
@@ -182,9 +192,9 @@ export default function Office() {
   return (
     <>
       <header className="topbar">
-        <span className="brand"><span className="brand-dot" />{snap.brief.service_name} · {snap.brief.title}</span>
-        <span className="badge info">{snap.mode === "live" ? "LIVE · gpt-4o-mini" : "DEMO · fixture 모드"}</span>
+        <span className="brand"><span className="brand-dot" />{snap.brief.company_name} 프로덕트팀 · {snap.brief.title}</span>
         <span className="spacer" />
+        {!submitted && <span className={`badge timer ${remaining <= 10 ? "warning" : "info"}`} aria-label="남은 시간">남은 시간 {fmtClock(remaining)}</span>}
         <span className={`badge ${conn === "open" ? "success" : "warning"}`}>{conn === "open" ? "실시간 연결됨" : "재연결 중…"}</span>
         <span className={`badge ${submitted ? "success" : "info"}`}>{submitted ? "제출 완료" : `진행 중 · 기획안 v${snap.artifact.version}`}</span>
         {!submitted && <button className="btn btn-primary" onClick={() => setSubmitOpen(true)}>제출</button>}
@@ -199,7 +209,7 @@ export default function Office() {
         <div className="card stack" role="dialog" aria-label="제출 확인" style={{ margin: "8px 16px" }}>
           <h3>기획안을 제출할까요?</h3>
           {emptySections.length > 0 && <div className="alert warning">비어 있는 섹션: {emptySections.join(", ")}. 그대로 제출할 수 있으며, 빈 섹션이라는 사실만 기록됩니다.</div>}
-          <p className="muted">제출하면 기획안이 고정되고 진행 중인 동료 작업과 승인 대기는 종료됩니다.</p>
+          <p className="muted">제출 후에는 문서와 진행 중 작업을 수정할 수 없습니다. 시간이 끝나면 저장된 내용으로 자동 제출됩니다.</p>
           <div className="row"><button className="btn btn-primary" onClick={submit}>제출 확정</button><button className="btn" onClick={() => setSubmitOpen(false)}>계속 작업</button></div>
         </div>
       )}
@@ -218,16 +228,22 @@ export default function Office() {
               </div>
             ) : (
               <>
-                <div className="card"><h4>과제 브리프</h4><p style={{ margin: 0 }}>{snap.brief.public_brief}</p></div>
+                <div className="card"><h4>과제 브리프</h4><p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{snap.brief.public_brief}</p></div>
                 {docs.length === 0 && <p className="muted">자료를 불러오는 중…</p>}
-                {docs.map((d) => <button key={d.id} className="doc-item" onClick={() => openDocument(d.id)}>{d.title}<div className="muted">{d.id} · v{d.version}</div></button>)}
+                {docs.map((d) => (
+                  <button key={d.id} className="doc-item" aria-disabled={d.available === false} disabled={d.available === false}
+                    onClick={() => openDocument(d.id)}>
+                    {d.title}
+                    <div className="muted">{d.available === false ? `🔒 ${d.notice ?? "아직 공유되지 않음"}` : `v${d.version}`}</div>
+                  </button>
+                ))}
               </>
             ))}
             {leftTab === "tasks" && snap.tasks.map((t) => (
               <div key={t.id} className="task stack">
                 <div className="row"><strong style={{ color: "var(--color-heading)" }}>{t.title}</strong><span className="spacer" /><span className={`badge ${TASK_STATUS[t.status]?.[1]}`}>{TASK_STATUS[t.status]?.[0]}</span></div>
-                <div className="muted">담당: {t.owner === "CANDIDATE" ? "나" : "이도현(AI 동료)"}{t.target_section ? ` · ${t.target_section}` : ""}</div>
-                {t.owner === "CANDIDATE" && !submitted && (
+                <div className="muted">담당: {OWNER_LABEL[t.owner]}</div>
+                {t.owner !== "COLLEAGUE" && !submitted && (
                   <div className="row">
                     {t.status === "TODO" && <button className="btn btn-sm" onClick={() => moveTask(t, "IN_PROGRESS")}>시작</button>}
                     {t.status === "IN_PROGRESS" && <button className="btn btn-sm" onClick={() => moveTask(t, "DONE")}>완료</button>}
@@ -252,16 +268,16 @@ export default function Office() {
               <button role="tab" className="tab" aria-selected={chatTab === "TEAM"} onClick={() => setChatTab("TEAM")}>팀 채팅</button>
               <button role="tab" className="tab" aria-selected={chatTab === "ASSISTANT"} onClick={() => setChatTab("ASSISTANT")}>어시스턴트</button>
               <span className="spacer" />
-              {busy && <span className="badge info">{run?.status === "WAITING_APPROVAL" ? "승인 대기" : "동료 작업 중"}</span>}
+              {busy && <span className="badge info">{run?.kind === "ASSISTANT" ? "어시스턴트 응답 중" : "이도현 입력 중"}</span>}
             </div>
             <Chat channel={chatTab} messages={snap.messages} progress={progress} busy={busy} disabled={submitted}
               failedRunId={failedRun} onSend={(t) => send(chatTab, t)} onRetry={retryRun}
-              onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)} onConfirmDelegation={confirmDelegation}
-              confirmedProposals={new Set([...confirmed, ...proposalsDone])} />
+              onOpenCitation={(c: Citation) => openDocument(c.document_id, c.quote)}
+              activeSplitMessageId={activeSplitMessageId} splitConfirmed={!!snap.split?.confirmed} onSplit={decideSplit} />
           </div>
         </section>
         <section className={`pane ${pane === "doc" ? "active" : ""}`} aria-label="개선 기획안">
-          <div className="pane-head"><h3 style={{ margin: 0 }}>개선 기획안</h3><span className="spacer" /><span className="muted">문제 정의·우선순위·최종안은 직접 결정합니다</span></div>
+          <div className="pane-head"><h3 style={{ margin: 0 }}>모아런 재참여율 개선 신규 기능 기획안</h3><span className="spacer" /><span className="muted">공유 문서 · 자동 저장</span></div>
           <div className="pane-body stack">
             {snap.approvals.map((a) => <ApprovalCard key={a.id} a={a} busy={busyApproval} onDecide={(d) => decide(a.id, d)} />)}
             <ArtifactEditor sessionId={sid} artifact={snap.artifact} readOnly={submitted} highlight={null}

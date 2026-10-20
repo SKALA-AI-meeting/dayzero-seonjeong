@@ -12,9 +12,16 @@ const reportLabel: Record<string, [string, string]> = {
   PENDING: ["리포트 대기", "warning"], RUNNING: ["리포트 생성 중", "info"], READY: ["리포트 준비", "success"], FAILED: ["리포트 실패", "error"],
 };
 
+const DEMO_EVENTS: [string, string][] = [
+  ["T-SPLIT", "00:10 업무 분담"], ["T-HELP", "00:30 도움 요청"], ["T-DELAY", "00:50 자료 지연"], ["T-INTERVIEW", "01:05 인터뷰 공개"],
+  ["T-PIVOT", "01:10 대상 변경"], ["T-ERROR", "01:30 동료 오류"], ["T-DEADLINE", "01:50 마감 보고"], ["T-END", "02:00 종료·자동 제출"],
+];
+
 export default function AdminSessions() {
   const router = useRouter();
   const [items, setItems] = useState<Item[] | null>(null);
+  const [demo, setDemo] = useState(false);
+  const [demoMsg, setDemoMsg] = useState<string | null>(null);
   const [alias, setAlias] = useState("");
   const [invite, setInvite] = useState<{ url: string; expires: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,8 +29,9 @@ export default function AdminSessions() {
 
   const refresh = useCallback(async () => {
     try {
-      const r = await api<{ items: Item[] }>("/sessions");
+      const r = await api<{ items: Item[]; demo_enabled: boolean }>("/sessions");
       setItems(r.items);
+      setDemo(r.demo_enabled);
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) router.push("/admin/login");
       else setError("세션 목록을 불러오지 못했습니다");
@@ -46,6 +54,16 @@ export default function AdminSessions() {
       setCopied(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "초대 생성 실패");
+    }
+  }
+
+  async function advance(id: string, ev: string) {
+    try {
+      const r = await api<{ fired: string[]; elapsed_min: number }>(`/sessions/${id}/demo/advance`, { method: "POST", json: { to_event: ev } });
+      setDemoMsg(`발생: ${r.fired.join(", ") || "없음"} (경과 ${Math.floor(r.elapsed_min)}분)`);
+      refresh();
+    } catch (e) {
+      setDemoMsg(e instanceof ApiError ? e.message : "시간 이동 실패");
     }
   }
 
@@ -74,6 +92,7 @@ export default function AdminSessions() {
         </div>
       )}
       {error && <div className="alert error" role="alert">오류: {error}</div>}
+      {demo && <div className="alert warning">시연 모드(APP_ENV=development): 진행 중 세션의 시간을 다음 이벤트로 이동할 수 있습니다. 지원자 화면에는 표시되지 않습니다.{demoMsg && <> · {demoMsg}</>}</div>}
       <div className="card">
         {items === null ? <p className="muted">불러오는 중…</p> : items.length === 0 ? <p className="muted">아직 입장한 지원자가 없습니다.</p> : (
           <table>
@@ -85,7 +104,15 @@ export default function AdminSessions() {
                   <td><span className={`badge ${statusLabel[s.status]?.[1] ?? ""}`}>{statusLabel[s.status]?.[0] ?? s.status}</span></td>
                   <td>{s.report_status ? <span className={`badge ${reportLabel[s.report_status]?.[1]}`}>{reportLabel[s.report_status]?.[0]}</span> : <span className="muted">—</span>}</td>
                   <td className="muted">{new Date(s.created_at).toLocaleString("ko-KR")}</td>
-                  <td>{s.report_status && <Link className="btn btn-sm" href={`/admin/reports/${s.id}`}>리포트 열기</Link>}</td>
+                  <td className="row">
+                    {s.report_status && <Link className="btn btn-sm" href={`/admin/reports/${s.id}`}>리포트 열기</Link>}
+                    {demo && s.status === "ACTIVE" && (
+                      <select aria-label="시연: 이벤트로 이동" defaultValue="" onChange={(e) => { if (e.target.value) advance(s.id, e.target.value); e.target.value = ""; }}>
+                        <option value="">시연: 이벤트로 이동…</option>
+                        {DEMO_EVENTS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                      </select>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

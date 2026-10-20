@@ -1,0 +1,7 @@
+[
+ {"query":"올해 유료 기능을 출시할 수 있나","expected":["operating-policy"]},
+ {"query":"위치 정보는 어디까지 공개하나","expected":["operating-policy"]},
+ {"query":"모임 규모별 재참여율","expected":["metrics-status"]},
+ {"query":"이번 분기 최우선 과제","expected":["meeting-notes"]},
+ {"query":"모아런의 주요 사용자와 핵심 기능","expected":["company-intro"]}
+]

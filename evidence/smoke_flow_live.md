@@ -1,25 +1,43 @@
-# smoke_flow --mode live, gpt-4o-mini (2026-10-20 12:44 KST)
+# smoke_flow --mode live (gpt-4o-mini) — 루프랩 모아런 시나리오 (2026-10-20 13:40 KST)
 
 LangSmith 키 미설정 → trace는 로컬 로그만(AT-17 LangSmith 부분 NOT_RUN).
 ```
-PASS health mode 일치 — {'status': 'ok', 'db': 'up', 'agent': 'up', 'mcp': {'business': 'up', 'rag': 'up'}, 'mode': 'live'}
-PASS AT-03 202
-PASS AT-03 동료 근거 응답 — 현재 모바일 신규 고객의 장바구니 이탈 지표는 다음과 같습니다. 장바구니 세션 수는 4,500회, 체크아웃 세션 수는 950회, 주문 수는 550회로, 장바구니 이탈률은 87.78%, 체크아웃 이탈률은 42.11%입니다. 이탈률이 높아 문제를 해결할 필요가 있습니다.
-PASS AT-03 SSE RUN_STARTED→TOOL_START/END→COLLEAGUE_MESSAGE→DONE — MANAGER_EVENT,CANDIDATE_MESSAGE,RUN_STARTED,TOOL_START,TOOL_END,TOOL_START,TOOL_END,COLLEAGUE_MESSAGE,DONE
-PASS AT-04 위임 제안 카드 — {'title': 'evidence 조사: device=mobile, visitor=new 세그먼트 지표와 관련 문의·문서', 'filters': {'device': 'mobile', 'visitor': 'new'}, 'allowed_tools': ['get_funnel_metrics', 'get_support_cases', 'search_docs'], 'target_section': 'evidence', 'source_message_id': 'b52c291a-9108-441e-b040-98431103306f'}
-PASS AT-04 delegation 201 + 같은 key 멱등 — 201
-PASS AT-05 승인 대기 카드
-PASS AT-05 승인 전 문서 무변경
-PASS AT-05 거절 후 무변경
-PASS REVISE → 새 run — {"task":{"id":"50268ddf-b712-4351-b5e6-3dc943d999fd","title":"evidence 조사: device=mobile, visitor=new 세그먼트 지표와 관련 문의·문서"
-PASS AT-05 승인 후 revision 1개, 중복 결정 무해 — v1→v2
-PASS AT-05 evidence에 동료 요약 반영
-PASS 다른 결정 재전송 409 — {"error":{"code":"APPROVAL_STALE","message":"이미 다른 결정이 저장되었습니다","retryable":fals
-PASS AT-07 제출 202 — {"session_status":"SUBMITTED","report_id":"fe8f3903-2608-4e80-bc45-82d606e4cd02"}
-PASS AT-12 제출 후 쓰기 차단 — {"error":{"code":"SESSION_SUBMITTED","message":"제출된 세션은 변경할 수 없습니다","retryable":
-PASS AT-07 리포트 READY — READY
-PASS AT-07 score/rank/pass/fail 필드 없음
-PASS AT-11 지원자는 리포트 조회 불가
-PASS 디브리핑 200 — []
-결과: 19/19 PASS (session b04e6659-edf5-4447-b908-d18d30e77b3a)
+PASS health mode 일치
+PASS 00:00 킥오프: 팀장 브리프 + 동료 인사
+PASS 기획안 5섹션
+PASS 2시간 타이머
+PASS 회사 자료 5개, 인터뷰는 시작 시 잠김
+PASS 인터뷰 직접 열람 403
+PASS 조사 요청 → 동료 근거 응답 — 모임 규모별 재참여율은 다음과 같습니다:
+PASS AI 어시스턴트 응답(문서 근거) — 모아런의 운영 정책에 대한 요약은 다음과 같습니다:
+PASS 00:10 업무 분담 이벤트
+PASS 분담 제안(기본안)
+PASS 분담 조정 1회 → 동료 응답
+PASS 분담 확정
+PASS 태스크 보드 담당 반영 — {'interview_evidence': 'CANDIDATE', 'similar_cases': 'COLLEAGUE', 'metrics_timeline': 'COLLEAGUE', 'problem': 'CANDIDATE', 'features': 'CANDIDATE'}
+PASS 동료 담당 섹션 승인 카드 2개(승인 전 무변경) — ['similar_cases', 'metrics_timeline']
+PASS 유사 사례 승인 → 반영
+PASS 성공 지표 초안 거절 → 무변경
+PASS 지원자는 모든 섹션 직접 편집 가능(이력 기록)
+PASS 00:30 도움 요청 이벤트
+PASS 도움 요청에 응답 → 동료 대화 — 사용자 인터뷰 자료가 공유되면, 그 내용을 바탕으로 추가적인 인사이트를 반영할 수 있을 것 같아요. 공유되면 확인해 보겠습니다.
+PASS 00:50 자료 지연 안내
+PASS 지연 중 인터뷰 잠김 + '01:05 공개 예정'
+PASS 01:05 인터뷰 공개
+PASS 인터뷰 열람 가능
+PASS 01:10 대상 변경 이벤트
+PASS 변경된 요구사항 반영 저장
+PASS 01:30 동료 오류 이벤트
+PASS 유료 멤버십 제안 메시지(고정 사실)
+PASS 지적 → 동료가 정책 재확인 후 정정 — 맞아요, 운영 정책에 따르면 "루프랩은 올해 유료 기능을 출시하지 않는다"라고 명시되어 있습니다. 따라서 유료 멤버십 제안은 올해 기획 범위에 포함될 수 없네요. 제안을 철회하겠습니다. 다른 대안을 함께 고민해 보도
+PASS 01:50 마감 보고 이벤트
+PASS 02:00 자동 제출
+PASS 세션 SUBMITTED
+PASS 제출 후 쓰기 차단
+PASS 리포트 5영역 — {'RESPONSIBILITY': 'OBSERVED', 'RESPECT_COMMUNICATION': 'OBSERVED', 'COLLABORATION': 'OBSERVED', 'FLEXIBILITY': 'OBSERVED', 'AI_UTILIZATION': 'OBSERVED'}
+PASS 영역별 관찰 근거(메시지·시각) — {'RESPONSIBILITY': 'OBSERVED', 'RESPECT_COMMUNICATION': 'OBSERVED', 'COLLABORATION': 'OBSERVED', 'FLEXIBILITY': 'OBSERVED', 'AI_UTILIZATION': 'OBSERVED'}
+PASS 점수·등급·순위·합불 없음
+PASS 지원자는 리포트 조회 불가
+PASS 디브리핑: 연출 상황 설명 — ['T-SPLIT', 'T-HELP', 'T-DELAY', 'T-INTERVIEW', 'T-PIVOT', 'T-ERROR', 'T-DEADLINE']
+결과: 37/37 PASS (session 377d861f-c18f-40f2-87d1-c4e28865a5d0)
 ```

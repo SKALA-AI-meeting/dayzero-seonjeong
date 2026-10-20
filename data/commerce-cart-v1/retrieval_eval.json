@@ -1,7 +1,0 @@
-[
- {"query":"배송비를 면제받는 주문 금액 기준","expected":["operating-policy"]},
- {"query":"분모가 다른 두 이탈 비율","expected":["metric-definitions"]},
- {"query":"주소 입력 화면을 최근에 바꿨나","expected":["release-log"]},
- {"query":"고객이 가입 때문에 멈췄다는 근거","expected":["customer-research"]},
- {"query":"기획안에서 내가 결정할 부분","expected":["brief","team-notes"]}
-]

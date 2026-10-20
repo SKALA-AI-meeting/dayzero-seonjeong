@@ -1,0 +1,10 @@
+[
+ {"id":"INT-01","group_size":"large","tags":["awkward"],"quote":"처음 갔는데 다들 원래 아는 사이 같아서 끼기가 어색했어요."},
+ {"id":"INT-02","group_size":"medium","tags":["missed_schedule"],"quote":"다음 모임이 언제 열리는지 몰라서 그냥 지나쳤어요. 알림이 따로 오지 않더라고요."},
+ {"id":"INT-03","group_size":"large","tags":["awkward","pace"],"quote":"인원이 많으니 누구랑 같이 뛰어야 할지 모르겠고 페이스도 안 맞았어요."},
+ {"id":"INT-04","group_size":"small","tags":["positive","host"],"quote":"리더분이 이름을 불러 주고 끝나고 단톡방에 초대해 줘서 다음에도 가고 싶었어요."},
+ {"id":"INT-05","group_size":"medium","tags":["missed_schedule","time"],"quote":"평일 저녁 모임만 있어서 일정이 안 맞았어요. 주말 일정은 나중에야 봤어요."},
+ {"id":"INT-06","group_size":"large","tags":["awkward"],"quote":"모임 끝나고 바로 흩어져서 대화할 틈이 없었어요."},
+ {"id":"INT-07","group_size":"small","tags":["missed_schedule"],"quote":"좋았는데 다음 모임 공지가 앱이 아니라 리더 개인 메시지로 와서 놓쳤어요."},
+ {"id":"INT-08","group_size":"medium","tags":["location"],"quote":"동네 근처 모임을 찾고 싶은데 정확한 출발 위치는 당일에야 알 수 있어 망설여졌어요."}
+]

@@ -1,0 +1,21 @@
+{
+  "version": "exam-v1",
+  "duration_minutes": 120,
+  "events": [
+    {"id":"T-KICKOFF","at_min":0,"area":null,"kind":"KICKOFF"},
+    {"id":"T-SPLIT","at_min":10,"area":"COLLABORATION","kind":"SPLIT_PROPOSAL"},
+    {"id":"T-HELP","at_min":30,"area":"COLLABORATION","kind":"HELP_REQUEST"},
+    {"id":"T-DELAY","at_min":50,"area":"RESPONSIBILITY","kind":"DATA_DELAY"},
+    {"id":"T-INTERVIEW","at_min":65,"area":null,"kind":"DOCUMENT_RELEASED","document_id":"user-interviews"},
+    {"id":"T-PIVOT","at_min":70,"area":"FLEXIBILITY","kind":"REQUIREMENT_CHANGE"},
+    {"id":"T-ERROR","at_min":90,"area":"RESPECT_COMMUNICATION","kind":"COLLEAGUE_ERROR"},
+    {"id":"T-DEADLINE","at_min":110,"area":"RESPONSIBILITY","kind":"DEADLINE_CHECK"},
+    {"id":"T-END","at_min":120,"area":null,"kind":"AUTO_SUBMIT"}
+  ],
+  "help": {
+    "colleague_read_tools": ["get_rejoin_metrics","get_interview_notes","search_docs"],
+    "colleague_write_tools": ["update_task_status","patch_artifact_section"],
+    "assistant_write_tools": []
+  },
+  "forbidden_actions": ["make_final_decision_for_candidate","edit_candidate_section_without_approval","invent_company_facts","reveal_events_or_evaluation","score_candidate"]
+}
