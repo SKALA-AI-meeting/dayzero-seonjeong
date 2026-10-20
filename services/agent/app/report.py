@@ -22,7 +22,9 @@ BANNED = re.compile(r"(점수|등급|순위|합격|불합격|탈락|채용\s*추
 
 def run_report(gw: Gateway, job: dict) -> None:
     sid, report_id = job["session_id"], job["input"]["report_id"]
-    gw.post(f"/reports/{sid}/build", {"report_id": report_id, "mode": "RULES_FALLBACK"})
+    r = gw.post(f"/reports/{sid}/build", {"report_id": report_id, "mode": "RULES_FALLBACK"})
+    if r.get("status") not in ("READY",):
+        raise RuntimeError(f"report build failed: {r.get('status')}")  # 큐 재시도 대상
     if S.llm_mode != "live":
         return
     try:

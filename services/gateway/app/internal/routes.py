@@ -669,3 +669,20 @@ def report_interpret(sid: str, body: InterpretIn):
                 "제한된 해석은 AI 추정이며 사실 근거(원문 ID)와 분리해 표시함"]
             c.execute("UPDATE reports SET body=%s, attempts=attempts+1 WHERE id=%s", (J(b), rep["id"]))
     return {"interpreted": n}
+
+
+
+class ReportFailedIn(Strict):
+    report_id: str
+    error: str = ""
+
+
+@router.post("/reports/{sid}/failed")
+def report_failed(sid: str, body: ReportFailedIn):
+    """대기열 최대 재시도 초과(DLQ) 시 리포트를 FAILED로 표시. 관리자 '다시 생성'으로 재발행 가능."""
+    with tx(dsn()) as c:
+        r = one(c, "UPDATE reports SET status='FAILED', error_code='QUEUE_MAX_ATTEMPTS', attempts=attempts+1 WHERE id=%s AND session_id=%s AND status<>'READY' RETURNING id",
+                (body.report_id, sid))
+        if r:
+            emit(c, sid, "REPORT_FAILED", {"report_id": body.report_id}, admin_payload={"report_id": body.report_id, "error": body.error[:300]})
+    return {"status": "FAILED" if r else "UNCHANGED"}
