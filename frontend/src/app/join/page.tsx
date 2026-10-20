@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
+import { Icon } from "@/components/Icon";
 import { api, ApiError, loadMe, setCsrf } from "@/lib/api";
 
 const CONSENT_ITEMS = [
@@ -59,21 +60,26 @@ function Join() {
   }
 
   return (
-    <main className="center-card card stack" style={{ maxWidth: 560 }}>
-      <h1><span className="brand-dot" />루프랩 프로덕트팀 합류</h1>
-      {error && <div className="alert error" role="alert">{error}</div>}
-      {!error && !sessionId && <p className="muted">초대를 확인하는 중…</p>}
-      {sessionId && !error && (
-        <>
-          <p>오늘 루프랩 프로덕트팀에 기획자로 합류합니다. 루프랩은 동네 러닝 모임 앱 ‘모아런’을 운영하는 리모트 스타트업입니다. 팀장 한서윤, 기획자 이도현(AI 동료)과 함께 2시간 동안 일합니다.</p>
-          <h3>시작 전 안내</h3>
-          <ul>{CONSENT_ITEMS.map((t) => <li key={t}>{t}</li>)}</ul>
-          <label className="row" style={{ fontWeight: 400 }}>
-            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> 위 내용을 확인했고 동의합니다.
-          </label>
-          <button className="btn btn-primary" disabled={!checked || busy} onClick={start}>{busy ? "입장 중…" : "작업 공간 입장"}</button>
-        </>
-      )}
+    <main className="center-wrap">
+      <div className="card center-card wide stack-lg">
+        <span className="wordmark"><span className="wordmark-dot" aria-hidden="true" />Day Zero</span>
+        <h1 className="display" style={{ fontSize: 28, lineHeight: "38px" }}>루프랩 프로덕트팀 합류</h1>
+        {error && <div className="alert error" role="alert"><Icon name="error" />{error}</div>}
+        {!error && !sessionId && <p className="row muted"><span className="spin" />초대를 확인하는 중…</p>}
+        {sessionId && !error && (
+          <>
+            <p>오늘 루프랩 프로덕트팀에 기획자로 합류합니다. 루프랩은 동네 러닝 모임 앱 ‘모아런’을 운영하는 리모트 스타트업입니다. 팀장 한서윤, 기획자 이도현(AI 동료)과 함께 2시간 동안 일합니다.</p>
+            <section className="card-sub stack" aria-labelledby="consent-title">
+              <h3 id="consent-title">시작 전 안내</h3>
+              <ul className="checklist">{CONSENT_ITEMS.map((t) => <li key={t}>{t}</li>)}</ul>
+            </section>
+            <label className="row" style={{ fontWeight: 400 }}>
+              <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> 위 내용을 확인했고 동의합니다.
+            </label>
+            <button className="btn btn-primary btn-lg btn-block" disabled={!checked || busy} onClick={start}>{busy ? "입장 중…" : "작업 공간 입장"}</button>
+          </>
+        )}
+      </div>
     </main>
   );
 }

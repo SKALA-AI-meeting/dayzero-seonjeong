@@ -34,13 +34,48 @@ export const SECTIONS: { id: string; title: string; hint: string }[] = [
   { id: "metrics_timeline", title: "5. 성공 지표와 출시 일정", hint: "성공 지표와 출시 일정을 적으세요." },
 ];
 
-export const ACTOR_LABEL: Record<string, string> = {
-  CANDIDATE: "나", COLLEAGUE: "이도현", MANAGER: "한서윤 팀장", ASSISTANT: "AI 어시스턴트", SYSTEM: "알림",
+/** 화면 문구 단일 매핑 (DESIGN_GUIDE §10.2, §11). 내용 예시는 DAYZERO_EXAM_SCENARIO 기준. */
+export const ACTOR: Record<string, { name: string; initial: string; badge?: [string, string]; avatar: string }> = {
+  MANAGER: { name: "한서윤", initial: "한", badge: ["팀장", ""], avatar: "" },
+  COLLEAGUE: { name: "이도현", initial: "이", badge: ["AI 동료", "info"], avatar: "colleague" },
+  CANDIDATE: { name: "나", initial: "나", avatar: "me" },
+  ASSISTANT: { name: "AI 어시스턴트", initial: "AI", badge: ["읽기 전용", ""], avatar: "assistant" },
+  SYSTEM: { name: "알림", initial: "!", avatar: "" },
 };
-export const OWNER_LABEL: Record<Owner, string> = { CANDIDATE: "나", COLLEAGUE: "이도현", JOINT: "공동" };
+export const OWNER_LABEL: Record<Owner, string> = { CANDIDATE: "나", COLLEAGUE: "이도현 · AI 동료", JOINT: "공동" };
+export const OWNER_SHORT: Record<Owner, string> = { CANDIDATE: "나", COLLEAGUE: "이도현", JOINT: "공동" };
 export const TASK_STATUS: Record<string, [string, string]> = {
-  TODO: ["할 일", ""], IN_PROGRESS: ["진행 중", "info"], REVIEW: ["검토 대기", "warning"], DONE: ["완료", "success"], CANCELLED: ["취소", ""],
+  TODO: ["할 일", ""], IN_PROGRESS: ["진행 중", "info"], REVIEW: ["검토 필요", "warning"], DONE: ["완료", "success"], CANCELLED: ["취소됨", ""],
 };
+export const CHANNELS = {
+  notice: { id: "notice", name: "프로젝트-공지", desc: "팀장 공지와 시스템 알림입니다. 이 채널에는 입력할 수 없습니다." },
+  team: { id: "team", name: "재참여-개선", desc: "이도현 동료와 업무를 나누고 자료를 함께 확인하세요." },
+} as const;
+export const COPY = {
+  brief_title: "루프랩 프로덕트팀에 합류했습니다",
+  composer: "이도현 동료에게 조사나 업무를 요청하세요",
+  assistant_desc: "자료를 찾고 내용을 이해하도록 돕습니다. 기획안이나 태스크를 직접 변경하지 않습니다.",
+  saving: "저장 중…", saved: "저장됨", save_failed: "저장하지 못했습니다. 작성한 내용은 이 브라우저에 남아 있습니다.",
+  reconnecting: "연결을 복구하고 있습니다. 저장된 작업은 유지됩니다.",
+  investigating: "자료를 확인하고 있어요.", approval_title: "문서 변경 승인이 필요합니다",
+  approval_stale: "문서가 그 사이 변경되어 이 제안을 적용할 수 없습니다. 현재 내용은 유지했습니다.",
+  empty_sections: "비어 있는 섹션이 있습니다. 불완전한 상태로도 제출할 수 있습니다.",
+  submit_confirm: "제출 후에는 문서와 진행 중 작업을 수정할 수 없습니다.", submitted: "기획안이 제출되었습니다",
+  ai_failed: "조사를 완료하지 못했습니다. 작성 중인 기획안은 저장되어 있습니다.",
+  report_failed: "리포트를 생성하지 못했습니다. 지원자 제출물은 안전하게 저장되어 있습니다.",
+  report_limit: "이 리포트는 단일 가상 과제에서 관찰된 행동을 정리하며 성격·채용 성과를 단정하지 않습니다.",
+};
+export const ERROR_COPY: Record<string, string> = {
+  RUN_BUSY: "이도현 동료가 이전 요청에 답하는 중입니다. 답변이 끝난 뒤 다시 보내 주세요.",
+  APPROVAL_STALE: COPY.approval_stale, APPROVAL_EXPIRED: "승인 요청이 만료되었습니다. 필요하면 태스크에서 수정 요청해 주세요.",
+  VERSION_CONFLICT: "다른 변경이 먼저 저장되었습니다. 내 입력은 보존되어 있습니다.",
+  SESSION_SUBMITTED: "제출된 세션은 수정할 수 없습니다.", LIMIT_REACHED: "분담 조정은 최대 3회까지 가능합니다. 현재 안으로 확정해 주세요.",
+  UNAUTHENTICATED: "접속 정보가 만료되었습니다. 초대 링크로 다시 입장해 주세요.",
+  LLM_UNAVAILABLE: COPY.ai_failed, AGENT_ERROR: COPY.ai_failed,
+};
+export function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Seoul" });
+}
 
 export function fmtClock(min: number): string {
   const m = Math.max(0, Math.floor(min));

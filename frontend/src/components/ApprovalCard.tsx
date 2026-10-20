@@ -1,37 +1,37 @@
 "use client";
-import { SECTIONS, type Approval } from "@/lib/types";
+import { useState } from "react";
+import { Icon } from "@/components/Icon";
+import { COPY, fmtTime, SECTIONS, type Approval } from "@/lib/types";
 
-const TOOL_LABEL: Record<string, string> = {
-  patch_artifact_section: "기획안 섹션 변경",
-  update_task_status: "태스크 상태 변경",
-};
-
+/** 승인 카드 (DESIGN_GUIDE §4.6): 대상·제안자·이전/이후·범위·만료, 승인만 주요 행동. */
 export function ApprovalCard({ a, busy, onDecide }: { a: Approval; busy: boolean; onDecide: (d: "APPROVE" | "REJECT") => void }) {
-  const expires = new Date(a.expires_at);
+  const [full, setFull] = useState(false);
+  const isDoc = a.tool_name === "patch_artifact_section";
+  const section = SECTIONS.find((x) => x.id === a.before_after.section);
   return (
-    <div className="card stack" role="region" aria-label="변경 승인 요청" style={{ borderLeft: "3px solid var(--color-warning)" }}>
+    <section className="approval stack" aria-label={COPY.approval_title}>
       <div className="row">
-        <span className="badge warning">확인 요청</span>
-        <h4 style={{ margin: 0 }}>{TOOL_LABEL[a.tool_name] ?? a.tool_name}</h4>
+        <Icon name="warning" />
+        <h3>{isDoc ? COPY.approval_title : "태스크 상태 변경 승인이 필요합니다"}</h3>
         <span className="spacer" />
-        <span className="muted">만료 {expires.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
+        <span className="badge warning">승인 대기</span>
       </div>
-      <div className="muted">이도현 님이 담당 섹션에 초안을 넣기 전에 확인을 요청했습니다 · 대상: {SECTIONS.find((x) => x.id === a.before_after.section)?.title ?? "태스크"}</div>
-      {a.tool_name === "patch_artifact_section" ? (
-        <div className="diff">
-          <div><div className="muted">이전</div><pre>{a.before_after.before || "(비어 있음)"}</pre></div>
-          <div><div className="muted">이후</div><pre>{a.before_after.after}</pre></div>
-        </div>
-      ) : (
-        <div className="diff">
-          <div><div className="muted">이전</div><pre>{a.before_after.before}</pre></div>
-          <div><div className="muted">이후</div><pre>{a.before_after.after}</pre></div>
-        </div>
-      )}
+      <dl className="kv">
+        <dt>대상</dt><dd>{section?.title ?? "태스크"}</dd>
+        <dt>제안자</dt><dd>이도현 · AI 동료</dd>
+        <dt>범위</dt><dd>{section ? `${section.title} 섹션만` : "해당 태스크만"}</dd>
+        <dt>결정 기한</dt><dd className="num">{fmtTime(a.expires_at)}까지</dd>
+      </dl>
+      <div className="diff">
+        <div><span className="small strong">변경 전</span><pre className={full ? "expanded" : ""}>{a.before_after.before || "(비어 있음)"}</pre></div>
+        <div><span className="small strong">변경 후 · 추가됨</span><pre className={full ? "expanded" : ""}>{a.before_after.after}</pre></div>
+      </div>
       <div className="row">
-        <button className="btn btn-primary" disabled={busy} onClick={() => onDecide("APPROVE")}>승인</button>
+        <button className="btn btn-primary" disabled={busy} onClick={() => onDecide("APPROVE")}>승인하고 반영</button>
         <button className="btn" disabled={busy} onClick={() => onDecide("REJECT")}>거절</button>
+        <span className="spacer" />
+        <button className="btn btn-tertiary btn-sm" onClick={() => setFull((v) => !v)} aria-expanded={full}>{full ? "접기" : "전체 보기"}</button>
       </div>
-    </div>
+    </section>
   );
 }

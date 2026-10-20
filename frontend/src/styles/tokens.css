@@ -1,17 +1,63 @@
-/* PRD 6.1 사용자 확정 디자인 토큰 — 화면별 임의 팔레트 추가 금지 */
+/* DESIGN_GUIDE §2 / §10.1 — PRD 6.1 사용자 확정 팔레트. 화면별 임의 팔레트 추가 금지 */
 :root {
-  --color-primary: #FF6347;
-  --color-primary-hover: #E64F37;
-  --color-primary-soft: #FFF0EC;
+  --color-primary: #ff6347;
+  --color-primary-hover: #e64f37;
+  --color-primary-soft: #fff0ec;
+  --color-on-primary: #111827;
   --color-heading: #253247;
   --color-body: #334155;
-  --color-muted: #64748B;
-  --color-background: #F8F9FC;
-  --color-surface: #FFFFFF;
-  --color-border: #E5E7EB;
-  --color-success: #16A34A;
-  --color-info: #2563EB;
-  --color-warning: #D97706;
-  --color-error: #DC2626;
-  --color-on-primary: #111827;
+  --color-muted: #64748b;
+  --color-background: #f8f9fc;
+  --color-surface: #ffffff;
+  --color-border: #e5e7eb;
+  --color-border-strong: #cbd5e1;
+  --color-neutral-strong: #111827;
+  --color-neutral-subtle: #f1f5f9;
+  --color-success: #16a34a;
+  --color-success-soft: #f0fdf4;
+  --color-success-border: #bbf7d0;
+  --color-info: #2563eb;
+  --color-info-soft: #eff6ff;
+  --color-info-border: #bfdbfe;
+  --color-warning: #d97706;
+  --color-warning-soft: #fffbeb;
+  --color-warning-border: #fde68a;
+  --color-error: #dc2626;
+  --color-error-soft: #fef2f2;
+  --color-error-border: #fecaca;
+  --color-focus: #2563eb;
+  --color-overlay: rgba(15, 23, 42, 0.48);
+
+  --font-sans: Pretendard, "Noto Sans KR", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.1);
+
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 240ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  --topbar-height: 56px;
+  --admin-header-height: 64px;
+  --workspace-nav-width: 248px;
+  --admin-nav-width: 224px;
+  --work-panel-width: 480px;
+  --assistant-drawer-width: 400px;
+  --doc-drawer-width: 520px;
 }
