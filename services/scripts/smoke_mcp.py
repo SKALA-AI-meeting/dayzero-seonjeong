@@ -28,7 +28,7 @@ INTERNAL = S.gateway_internal_url + "/internal/v1"
 SVC = {"x-service-token": S.internal_service_secret}
 results: list[tuple[str, bool, str]] = []
 BUSINESS = {"get_session_context", "get_scenario", "get_next_event", "get_planted_error", "record_observation",
-            "update_task_status", "suggest_candidate_edit"}
+            "update_task_status", "suggest_candidate_edit", "read_artifact", "edit_own_artifact"}
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -46,7 +46,10 @@ def make_running_run(alias: str) -> tuple[str, str, str]:
     h = {"X-CSRF-Token": e["csrf_token"]}
     c.post(f"/sessions/{e['session_id']}/start", json={"consent": True}, headers=h)
     r = c.post(f"/sessions/{e['session_id']}/messages",
-               json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM", "content": "smoke"}, headers=h).json()
+               json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM", "content": "표 금액이 5000포인트라서요, 브리프 확인 부탁드립니다"}, headers=h).json()
+    from shared.db import tx
+    with tx(S.psycopg_dsn) as db:
+        db.execute("UPDATE jobs SET available_at=now()+interval '10 minutes' WHERE run_id=%s", (r['run_id'],))
     # Claim this run so a live agent worker does not race the smoke test, then mark it RUNNING.
     httpx.post(f"{INTERNAL}/runs/{r['run_id']}/state", json={"status": "RUNNING"}, headers=SVC).raise_for_status()
     msg = c.get(f"/sessions/{e['session_id']}", headers=h).json()["messages"][-1]["id"]
@@ -75,7 +78,7 @@ async def main() -> int:
 
     async with client(S.business_mcp_url, btok) as b:
         tools = {t.name: t for t in (await b.list_tools()).tools}
-        check("business tools/list 7개", set(tools) == BUSINESS, ",".join(sorted(tools)))
+        check("business tools/list 9개", set(tools) == BUSINESS, ",".join(sorted(tools)))
         ann = tools["suggest_candidate_edit"].annotations
         check("변경 도구 destructiveHint=true/readOnlyHint=false", bool(ann and ann.destructive_hint and not ann.read_only_hint))
         ann = tools["get_scenario"].annotations
@@ -83,15 +86,15 @@ async def main() -> int:
         ann = tools["record_observation"].annotations
         check("record_observation: 비파괴·멱등(승인 불필요)", bool(ann and not ann.read_only_hint and not ann.destructive_hint and ann.idempotent_hint))
         p = payload(await b.call_tool("get_session_context", {}))
-        check("get_session_context: 턴·경과 시간·보드", p["ok"] and p["data"]["elapsed_seconds"] == "09:00"
+        check("get_session_context: 턴·경과 시간·보드", p["ok"] and p["data"]["elapsed_seconds"] < 60
               and [t["key"] for t in p["data"]["tasks"]] == ["T1", "T2", "T3"], str(p["data"].get("turn_count")))
         p = payload(await b.call_tool("get_scenario", {}))
         txt = json.dumps(p["data"], ensure_ascii=False)
         check("get_scenario: 이벤트 7개 + 정답(planted_errors) 미포함", p["ok"] and len(p["data"]["events"]) == 7
               and "planted_errors" not in p["data"] and "11/2 ~ 11/31" not in txt)
         p = payload(await b.call_tool("get_next_event", {}))
-        check("get_next_event: 다음 E1, 턴 5까지 남은 턴", p["ok"] and p["data"]["next"]["id"] == "E1"
-              and p["data"]["next"]["turns_until"] == 5 - p["data"]["turn_count"], str(p["data"]["next"]))
+        check("get_next_event: 다음 E1, 10분까지 남은 시간", p["ok"] and p["data"]["next"]["id"] == "E1"
+              and 0 < p["data"]["next"]["seconds_until"] <= 600, str(p["data"]["next"]))
         p = payload(await b.call_tool("get_planted_error", {"error_ids": ["PE-2"]}))
         it = p["data"]["items"][0]
         check("get_planted_error: confidential + 오답/정답/수정 규칙", p["data"]["confidential"] and it["wrong"] == "초대 1명당 5,000P"

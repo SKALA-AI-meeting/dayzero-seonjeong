@@ -1,0 +1,155 @@
+{
+  "mode": "fixture",
+  "checks": [
+    {
+      "name": "health mode",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "30 saves never advance events before open_at",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rehearsal message 1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "T3 5000P → 3000P immediately without approval",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "chat describes concrete edit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rehearsal message 2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "rehearsal message 3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no repeated clarification",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "wrong criticism leaves document unchanged",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "wrong criticism explains brief",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "fact correction is not blame",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "review actually reads document",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "review creates approval card",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "approved review edit applied",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "CO+7 review request recorded",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "open_at gate",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "next action after open fires E1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "event occurrence records on_action",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "no action force_at fires E2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "forced mode and real elapsed seconds",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "E4 at 50 minutes",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "E4 report does not submit",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "60 minutes auto submits saved state",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "offline reply limit (False)",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "return asks if unchanged",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "offline reply limit (True)",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "return notices changed document",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "promise/action audit: zero violations",
+      "passed": true,
+      "detail": "0"
+    },
+    {
+      "name": "report ready",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "timeline includes elapsed time and occurrence mode",
+      "passed": true,
+      "detail": ""
+    }
+  ]
+}

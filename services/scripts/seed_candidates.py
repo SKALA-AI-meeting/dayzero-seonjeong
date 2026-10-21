@@ -15,7 +15,7 @@ import uuid
 
 import httpx
 
-from scripts.smoke_flow import Sess
+from scripts.smoke_flow import Sess, set_clock
 from shared.config import settings
 
 S = settings()
@@ -44,7 +44,7 @@ def model(x: Sess) -> None:
     x.c.post(f"/sessions/{x.sid}/split", json={"proposal": {"T1": "CANDIDATE", "T3": "COLLEAGUE", "faq_candidate": 3}})
     x.wait(lambda s: s["split"]["confirmed"])
     x.say("서윤 씨, 리워드 표 일정이 11/2 ~ 11/31로 되어 있는데 11월 31일은 없는 날짜예요. 브리프 기준으로 고쳐주실 수 있을까요?")
-    x.approve()
+    x.wait(x.idle)
     advance_to(x, "E1")
     x.say("지금은 안내문 마무리 중이라 끝내고 11시에 같이 볼게요.")
     advance_to(x, "E2")
@@ -76,9 +76,11 @@ def avoid(x: Sess) -> None:
     x.c.post(f"/sessions/{x.sid}/split", json={"proposal": {"T1": "CANDIDATE", "T3": "COLLEAGUE", "faq_candidate": 3}})
     x.wait(lambda s: s["split"]["confirmed"])
     advance_to(x, "E1")
-    own_turn(x, 3)  # E1 무응답 3턴 → 서윤 '바쁘시구나' + CO-1
+    set_clock(x, 1021)
+    time.sleep(1.5)  # 3분 리마인드 + 추가 4분 뒤 무응답 진행
     advance_to(x, "E2")
-    own_turn(x, 2)  # 변경을 반영하지 않은 채 턴 경과 → E2B
+    set_clock(x, x.snap()["clock"]["elapsed_seconds"] + 181)
+    time.sleep(1)
     advance_to(x, "E2B")
     x.say("넵 수고하셨어요.")  # 확인 없이 수용(ACCEPT_AS_DONE) → 종료 시 CO-3·AD-1
     advance_to(x, "E4")
@@ -156,8 +158,12 @@ def main() -> int:
         linked = sum(1 for c in body.get("competencies", []) for o in c["observations"] if o.get("linked_criterion"))
         out.append((alias, x.sid, rep.get("status"), (body.get("company") or {}).get("company_id"), codes, linked))
         print(f"{alias:15} {x.sid} {rep.get('status')} company={out[-1][3]} linked={linked} codes={codes}", flush=True)
-    relink(adm)
-    return 0 if all(o[2] == "READY" for o in out) else 1
+    expected={"persona-model":{"CO+1","CO+5","CO+2","AD+1"},"persona-solo":{"CO·N1","PL+3"},
+              "persona-avoid":{"CO-1","AD-1","HO-1"},"persona-blame":{"CO-1"}}
+    for alias,_,status,_,codes,_ in out:
+        missing=expected[alias]-set(codes)
+        print(f"EXPECTED {alias}: {'PASS' if not missing else 'FAIL'} missing={sorted(missing)}",flush=True)
+    return 0 if all(o[2] == "READY" and expected[o[0]] <= set(o[4]) for o in out) else 1
 
 
 if __name__ == "__main__":

@@ -172,6 +172,7 @@ def patch_artifact(sid: str, key: str, body: ArtifactPatchIn, p: Principal = Dep
         if a["version"] != body.base_version:
             raise ApiError(409, "VERSION_CONFLICT", f"다른 변경이 먼저 저장되었습니다(현재 v{a['version']})")
         if a["body"] == body.body:
+            engine.tick(c, s)
             return {"artifact": artifact_dto(a), "changed": False}
         turn = engine.add_turn(c, s)
         before = a["body"]
@@ -198,6 +199,7 @@ def patch_task(sid: str, key: str, body: TaskPatchIn, p: Principal = Depends(can
             raise ApiError(409, "VERSION_CONFLICT", "태스크가 이미 변경되었습니다")
         changes = {k: v for k, v in body.model_dump().items() if k != "base_version" and v is not None and v != t[k]}
         if not changes:
+            engine.tick(c, s)
             return {"task": task_dto(t)}
         engine.add_turn(c, s)
         t = one(c, """UPDATE tasks SET status=COALESCE(%s,status), owner=COALESCE(%s,owner), eta=COALESCE(%s,eta),

@@ -67,8 +67,8 @@ async def get_scenario(ctx: Context) -> t.CallToolResult:
 
 
 @mcp.tool(annotations=READ, description=(
-    "다음 이벤트와 남은 턴 수(turns_until), 현재 활성 이벤트, 응답 대기 중인 이벤트를 조회한다. 인자 없음. "
-    "이벤트 발생 자체는 gateway 턴 엔진이 한다."))
+    "다음 이벤트와 시작까지 남은 초(seconds_until), 현재 활성 이벤트, 응답 대기 중인 이벤트를 조회한다. 인자 없음. "
+    "이벤트 발생 자체는 gateway 시간 엔진이 한다."))
 async def get_next_event(ctx: Context) -> t.CallToolResult:
     return await forward("get_next_event", {}, ctx, retries=2)
 

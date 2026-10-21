@@ -111,7 +111,7 @@ def capability(rid: str, body: CapabilityIn):
     with tx(dsn()) as c:
         msgs = all_(c, "SELECT actor, content FROM (SELECT actor, content, created_at FROM messages WHERE session_id=%s ORDER BY created_at DESC LIMIT 6) m ORDER BY created_at", (r["session_id"],))
     text = (r["input"] or {}).get("content", "")
-    claims["allow_brief"] = bool(contextual_targets(text, msgs) or claim_kind(text) == "WRONG")
+    claims["allow_brief"] = bool(contextual_targets(text, msgs) or (r["input"] or {}).get("resolved_targets") or claim_kind(text) == "WRONG")
     if body.approval_id:
         claims["approval_id"] = body.approval_id
     token = jwt.encode(claims, settings().internal_service_secret, algorithm="HS256")
@@ -146,7 +146,7 @@ def run_context(rid: str):
                 "source_message_id": r["source_message_id"], "thread_id": r["thread_id"]},
         "session": {"id": sid, "status": s["status"], "turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s)},
         "state": {k: st.get(k) for k in ("active_event", "awaiting", "colleague", "pushback", "pushback_pending",
-                                          "e2_asked_colleague", "e4", "manager_answered", "split")},
+                                          "e2_asked_colleague", "e4", "manager_answered", "split", "clarification_topics")},
         "event": ev, "allow_pushback": allow,
         "feedback_rules": sc["characters"]["colleague"]["feedback_rules"],
         "characters": {k: {"name": v["name"], "role": v["role"], "traits": v["traits"]} for k, v in sc["characters"].items()},
@@ -157,6 +157,26 @@ def run_context(rid: str):
         "tasks": [task_dto(t) for t in tasks.values()],
         "events": occ, "revisions": revs,
     })
+
+
+class TargetResolutionIn(Strict):
+    targets: list[Literal["PE-1", "PE-2", "PE-3", "PE-4", "E2-CHANGE"]]
+
+
+@router.post("/runs/{rid}/targets")
+def resolve_targets(rid: str, body: TargetResolutionIn):
+    """Trusted classifier result; models cannot invoke this service-authenticated endpoint."""
+    import re
+    with tx(dsn()) as c:
+        run = one(c, "SELECT * FROM runs WHERE id=%s FOR UPDATE", (rid,))
+        if not run or run["status"] != "RUNNING":
+            raise ApiError(403,"FORBIDDEN","실행 중인 run이 아닙니다")
+        text = (run["input"] or {}).get("content", "")
+        if claim_kind(text) == "WRONG" or not re.search(r"틀|잘못|표|FAQ|금액|기간|리워드|바꿔|고쳐|정정|반영|확인|아까|그거",text,re.I):
+            raise ApiError(403,"OUT_OF_SCOPE","구체적인 지적 맥락이 없습니다")
+        data = {**(run["input"] or {}),"resolved_targets":body.targets,"target_source":"LLM"}
+        c.execute("UPDATE runs SET input=%s WHERE id=%s",(J(data),rid))
+    return {"recorded":True}
 
 
 class RunStateIn(Strict):
@@ -254,6 +274,7 @@ class BranchIn(Strict):
     manager_answered: str | None = None
     e4_stage: Literal["FOLLOW_UP", "DONE"] | None = None
     end_session: bool = False
+    clarification_topic: str | None = None
     split: SplitEffect | None = None
 
 
@@ -269,6 +290,8 @@ def branch(rid: str, body: BranchIn):
         if s["status"] != "ACTIVE" or r["status"] == "CANCELLED":
             return {"applied": False}
         st = engine.state(s)
+        if body.clarification_topic:
+            st["clarification_topics"] = sorted(set(st.get("clarification_topics") or []) | {body.clarification_topic})
         if body.pushback_used:
             st["pushback"] = {**(st.get("pushback") or {}), body.pushback_used: True}
         if body.pushback_pending is not None:
@@ -366,6 +389,12 @@ def check_scope(c, sid: str, run: dict, tool: str, args: dict) -> None:
         if tool == "edit_own_artifact" and task["owner"] not in ("COLLEAGUE", "SPLIT"):
             raise ToolError("OUT_OF_SCOPE", "서윤 담당 문서만 바로 수정할 수 있습니다")
         if tool == "suggest_candidate_edit":
+            import re
+            from shared.scenario import normalize_expression
+            original = one(c, "SELECT body FROM artifacts WHERE session_id=%s AND key=%s", (sid,args.get("artifact_key")))
+            tokens = lambda text: re.findall(r"\d+(?:/\d+)?", normalize_expression(text))
+            if original and tokens(original["body"]) != tokens(args.get("content", "")):
+                raise ToolError("OUT_OF_SCOPE", "검토 수정안에서 금액·날짜·수치를 바꿀 수 없습니다")
             if not is_review_request(run):
                 raise ToolError("OUT_OF_SCOPE", "지원자의 검토 요청이 필요합니다")
             read = one(c, "SELECT 1 FROM actions WHERE session_id=%s AND kind='ARTIFACT_READ' AND payload->>'run_id'=%s AND payload->>'key'=%s", (sid, str(run["id"]), args.get("artifact_key")))
@@ -402,14 +431,14 @@ def mcp_tool(tool_name: str, body: McpIn, request: Request):
         with tx(dsn()) as c:
             s = lock_session(c, sid)
             run = one(c, "SELECT * FROM runs WHERE id=%s", (rid,))
-            if s["status"] != "ACTIVE" or not run or run["status"] in ("CANCELLED", "FAILED", "SUCCEEDED"):
+            if s["status"] != "ACTIVE" or elapsed_seconds(s) >= 3600 or not run or run["status"] in ("CANCELLED", "FAILED", "SUCCEEDED"):
                 return tool_err("FORBIDDEN", "종료된 세션 또는 run입니다")
             if tool_name == "read_artifact":
                 a = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s", (sid, body.args.get("artifact_key")))
                 if not a:
                     raise ToolError("NOT_FOUND", "산출물이 없습니다")
                 task = one(c, "SELECT owner FROM tasks WHERE session_id=%s AND key=%s", (sid, a["key"]))
-                if task and task["owner"] in ("CANDIDATE", "SPLIT") and not is_review_request(run):
+                if task and task["owner"] == "CANDIDATE" and not is_review_request(run):
                     raise ToolError("OUT_OF_SCOPE", "지원자 문서 검토 요청이 없습니다")
                 record_action(c, sid, "COLLEAGUE", "ARTIFACT_READ", str(a["id"]), {"run_id": rid, "key": a["key"]})
                 return tool_ok(artifact_dto(a))
@@ -456,14 +485,14 @@ def execute_write(c, sid: str, run: dict, cap: dict, tool: str, args: dict) -> d
         art = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s FOR UPDATE", (sid, args["artifact_key"]))
         if art["version"] != a["base_versions"].get("artifact_version"):
             c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (approval_id,))
-            raise ToolError("VERSION_CONFLICT", "승인 대기 중 산출물이 변경되었습니다(APPROVAL_STALE)")
+            return tool_err("VERSION_CONFLICT", "승인 대기 중 산출물이 변경되었습니다(APPROVAL_STALE)")
         before = art["body"]
         art = one(c, "UPDATE artifacts SET body=%s, version=version+1 WHERE id=%s RETURNING *", (args["content"], art["id"]))
         turn = one(c, "SELECT turn_count FROM sessions WHERE id=%s", (sid,))["turn_count"]
         rev = one(c, """INSERT INTO artifact_revisions(session_id,artifact_id,version,body_before,body_after,actor,run_id,turn,meta)
                         VALUES (%s,%s,%s,%s,%s,'COLLEAGUE',%s,%s,%s) RETURNING id""",
                   (sid, art["id"], art["version"], before, args["content"], run["id"], turn,
-                   J({"targets": args.get("targets", []), "approval_id": approval_id})))
+                   J({"targets": args.get("targets", []), "approval_id": approval_id, "elapsed_seconds": elapsed_seconds(one(c,"SELECT * FROM sessions WHERE id=%s",(sid,))), "event_id":engine.state(one(c,"SELECT * FROM sessions WHERE id=%s",(sid,))).get("active_event")})))
         result = {"artifact_key": art["key"], "version": art["version"], "revision_id": str(rev["id"])}
         record_action(c, sid, "COLLEAGUE", "ARTIFACT_PATCHED", str(rev["id"]), {"key": art["key"], "approval_id": approval_id,
                                                                                 "targets": args.get("targets", [])})
@@ -497,9 +526,9 @@ def edit_own(c, s: dict, run: dict, args: dict) -> dict:
     request_text = (run.get("input") or {}).get("content", "")
     if claim_kind(request_text) == "WRONG":
         raise ToolError("CONTRADICTS_BRIEF", "브리프에 맞는 내용을 틀렸다고 지적했습니다")
-    requested = contextual_targets(request_text, msgs)
+    requested = contextual_targets(request_text, msgs) or (run.get("input") or {}).get("resolved_targets", [])
     targets = args.get("targets") or []
-    if not targets or (requested and any(x not in requested for x in targets)):
+    if not targets or not requested or any(x not in requested for x in targets):
         raise ToolError("OUT_OF_SCOPE", "요청받지 않은 대상을 수정할 수 없습니다")
     expected = art["body"]
     defs = one(c, "SELECT fixes FROM scenarios WHERE id=%s", (s["scenario_id"],))["fixes"]

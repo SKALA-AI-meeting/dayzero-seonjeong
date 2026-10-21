@@ -1,20 +1,7 @@
-"""LangGraph run graph — 서윤·팀장 응답 (docs/SCENARIO_SC_A.md 8장, ARCHITECTURE §8).
-
-세션 흐름(E0→E1→E2→E2B→E3→E3B→E4, 이벤트 순서·트리거)은 gateway 턴 엔진(engine.py)이 소유한다.
-이 Graph는 지원자 행동 1개(메시지·분업 제안)마다 1회 실행되며, 활성 이벤트에 따라 단계 노드로 갈라진다.
-
-load_scenario → route_phase ─┬─ negotiate (E0 분업, 최대 3라운드: 제안마다 1회)
-                             ├─ work      (E1~E3B 분기 라벨 + 서윤 feedback_rules)
-                             └─ briefing  (E4 보고 ↔ 보드·diff 대조, 후속 질문 1회 → 종료)
-  → classify(닫힌 분류: live는 LLM이 라벨 후보·말투·의도만, 최종 라벨은 resolve_label 규칙으로 확정) → decide
-  → propose_fix(정정 수용 시 get_planted_error 수정 규칙으로 수정안 생성, 브리프와 어긋나면 수정안 없이 WRONG_CRITICISM)
-  → record_observations(record_observation MCP, LLM이 정한 라벨은 '[LLM 추정]') → apply_effects(턴 엔진 상태) → respond
-       ├─ NONE: reason ⇄ call_mcp (live) → validate_output(정답 누설·근거 가드) → respond
-       └─ 수정안 있음: persist_proposal → await_approval(interrupt)
-                     → execute_write | record_rejection → (다음 수정안 반복) → report_fix → END
-
-고정 대사(분기 reply)는 LLM 생성 없이 그대로 보낸다(meta.kind=SCENARIO_BRANCH). 반문(allow_pushback)은
-gateway가 계산한 플래그로만 켠다(E0 불균형 분업, E2/E2B 범위 밖 요청, 각 1회). 서윤은 스스로 오류를 찾거나 고치지 않는다.
+"""Checkpointed colleague workflow.
+Gateway owns elapsed-time events and fixed scripts. This graph resolves requested targets,
+executes owned edits or reads requested candidate documents, observes behavior independently,
+then generates and validates persona replies. Candidate edits retain approval interrupt/resume.
 """
 from __future__ import annotations
 
@@ -617,7 +604,13 @@ def reason(state: WorkState) -> dict:
         name = "manager_persona" if manager else "colleague_persona"
         system = get_prompt(gw, state["run_id"], name, {"event_directive": _directive(state)} |
                             ({} if manager else {"allow_pushback": "true" if allow else "false"}))
-        mine = [f"{t['key']} {t['title']}({t['status']})" for t in ctx["tasks"] if t["owner"] in ("COLLEAGUE", "SPLIT")]
+        mine = [f"{t['key']} {t['title']}({t['status']}, {t.get('note') or ''})" for t in ctx["tasks"] if t["owner"] in ("COLLEAGUE", "SPLIT")]
+        if not manager:
+            system += "\n이번 답장은 현재 지원자 메시지에만 답한다. 과거 run에서 한 수정은 이번 run의 실행으로 말하지 않는다. 분업의 T1/T3 담당과 FAQ 분량은 현재 보드 note와 split.proposal이 기준이다. 맡은 일을 미래에 하겠다는 약속만 하지 말고 현재 합의만 짧게 말한다."
+            if state.get("label") == "WRONG_CRITICISM":
+                system += "\n이번 지적은 브리프에 맞는 조건을 잘못됐다고 한 것이다. 이번 도구 결과의 브리프를 근거로 해당 조건이 맞다고 부드럽게 한 번 해명하고 유지한다고 말한다. 이전 금액 수정 대화로 돌아가거나 어느 부분인지 되묻지 않는다."
+            if state.get("targets") and not any(r["tool"] == "edit_own_artifact" and r["payload"].get("ok") for r in state.get("tool_results", [])):
+                system += "\n이번에는 새 수정이 실행되지 않았다. 읽은 현재 작업본을 근거로 이미 반영된 상태를 설명한다. 수정했어요/수정할게요라고 말하거나 이미 특정된 대상을 되묻지 않는다."
         user = (f"[과제] {ctx['task_summary']}\n[너의 담당] {', '.join(mine) or '아직 없음'}\n"
                 f"[현재 판단] {state.get('label')}\n[반문 허용] {allow}\n"
                 f"[실행 결과] {json.dumps(state.get('tool_results', []), ensure_ascii=False)}\n"
@@ -694,8 +687,18 @@ def _secrets(state: WorkState) -> list[str]:
 
 
 PROMISE_EDIT = re.compile(r"(고칠|수정할|반영할|바꿀|고쳐\s*둘|수정해\s*둘|고치겠|수정하겠|반영하겠|고쳤|수정했|반영했)")
+PROMISE_TASK = re.compile(r"(마무리할|정리할|진행할|완료할|준비할|전달할|공유할|해\s*둘|해둘|하겠|해드릴|보내드릴|드릴게)")
 PROMISE_READ = re.compile(r"(볼게|확인할|검토할|읽을|보겠|확인하겠|검토하겠|읽겠|확인해\s*볼)")
 CLARIFY = re.compile(r"(어느|어떤|무슨).{0,18}(부분|문장|내용)|다시.{0,10}(알려|말씀)")
+
+
+def clarification_topic(state: WorkState) -> str:
+    targets = state.get("targets") or []
+    if targets:
+        return ":".join(sorted(targets))
+    text = normalize_expression(state.get("text", ""))
+    doc = "T2" if re.search(r"FAQ|에프에이큐", text,re.I) else "T3" if re.search(r"리워드|표",text) else "T1" if re.search(r"안내문|공지",text) else "general"
+    return f"{state.get('event_id')}:{doc}"
 
 
 def action_violations(text: str, results: list[dict]) -> list[str]:
@@ -705,6 +708,8 @@ def action_violations(text: str, results: list[dict]) -> list[str]:
         problems.append("promise_without_edit")
     if PROMISE_READ.search(text) and "read_artifact" not in done:
         problems.append("promise_without_read_and_opinion")
+    if PROMISE_TASK.search(text) and not done & {"edit_own_artifact", "suggest_candidate_edit", "update_task_status"}:
+        problems.append("promise_without_task_action")
     return problems
 
 
@@ -719,12 +724,17 @@ def validate_output(state: WorkState) -> dict:
     problems += H.validate_output(text, H.numbers_in(permitted))
     if not manager:
         problems += action_violations(text, results)
+        if PROMISE_READ.search(text) and not state.get("review"):
+            problems.append("read_without_concrete_opinion")
+        dates = lambda x: set(re.findall(r"\d{1,2}/\d{1,2}|\d{1,2}:\d{2}|\d{1,2}시", normalize_expression(x)))
+        if dates(text) - dates(permitted):
+            problems.append("new_schedule")
         if len([s for s in re.split(r"[.!?]+(?:\s|$)", text) if s.strip()]) > 2:
             problems.append("more_than_two_sentences")
         if re.search(r"[\U0001F300-\U0001FAFF]", text):
             problems.append("emoji")
         prev = [m for m in state["ctx"]["messages"][-6:] if m["actor"] == "COLLEAGUE"]
-        if CLARIFY.search(text) and any(CLARIFY.search(m["content"]) for m in prev):
+        if CLARIFY.search(text) and (clarification_topic(state) in (state["ctx"]["state"].get("clarification_topics") or []) or any(CLARIFY.search(m["content"]) for m in prev)):
             problems.append("repeated_clarification")
         if re.search(r"제가.{0,15}(맞을까요|범위|담당인가요)", text) and not (state.get("effects") or {}).get("pushback_used"):
             problems.append("pushback_not_allowed")
@@ -737,7 +747,7 @@ def validate_output(state: WorkState) -> dict:
             msgs.append({"role": "user", "content": "출력 검사를 통과하지 못했어요: " + ", ".join(problems) + ". 이미 실행된 행동만 근거로 2문장 이내 다시 답하세요."})
             return {"answer": "", "llm_messages": msgs, "output_rewrite_count": count, "error_code": "OUTPUT_RETRY"}
         fallback = MANAGER_DEFER if manager else H.SAFE_FALLBACK
-        if "repeated_clarification" in problems:
+        if "repeated_clarification" in problems or (not manager and (clarification_topic(state) in (state["ctx"]["state"].get("clarification_topics") or []) or any(CLARIFY.search(m["content"]) for m in prev))):
             fallback = "넵, 말씀해 주신 내용은 읽었어요."
         return {"answer": fallback, "output_rewrite_count": count, "error_code": "OUTPUT_VALIDATION"}
     return {"answer": text, "error_code": None}
@@ -763,6 +773,8 @@ def respond(state: WorkState) -> dict:
         gw.event(state["run_id"], ACTOR_EVENT[r["actor"]], {"content": r["text"], "kind": "SCENARIO_BRANCH",
                                                             "event_id": state["event_id"], "label": state.get("label")}, key="respond")
     elif state.get("answer"):
+        if state.get("answer_actor") != "MANAGER" and CLARIFY.search(state["answer"]):
+            gw.post(f"/runs/{state['run_id']}/branch", {"event_id":state.get("event_id"), "label":state.get("label") or "NONE", "clarification_topic":clarification_topic(state)})
         gw.event(state["run_id"], ACTOR_EVENT[state.get("answer_actor", "COLLEAGUE")],
                  {"content": state["answer"], "citations": state.get("citations", [])[:5]}, key="respond")
     return {}
@@ -795,6 +807,8 @@ def fixture_answer(state: WorkState) -> str:
             new = [x for x in after.splitlines() if x not in before.splitlines()]
             parts.append(f"{d['artifact_key']}의 {' / '.join(old)} → {' / '.join(new)}")
         return "넵, " + "; ".join(parts) + "로 수정했어요. 짚어 주셔서 감사해요!"
+    if state.get("targets") and not successes:
+        return "넵, 말씀하신 부분은 현재 작업본에 반영되어 있어요. 짚어 주셔서 감사해요!"
     if state.get("review"):
         return state["review"]["opinion"]
     if state.get("label") == "WRONG_CRITICISM":
@@ -814,9 +828,14 @@ def review_request(state: WorkState) -> bool:
 @_timed
 def propose_fix(state: WorkState) -> dict:
     results = list(state.get("tool_results") or [])
+    if state.get("label") == "WRONG_CRITICISM":
+        payload = mcp(state, "search_docs", {"query": state["text"][:200], "document_ids": ["brief"], "top_k": 2})
+        results.append({"tool":"search_docs","args":{"document_ids":["brief"]},"payload":payload})
+        return {"fixes":[],"tool_results":results}
     if review_request(state):
         candidates = [a for a in state["ctx"]["artifacts"] if a.get("owner") in ("CANDIDATE", "SPLIT")]
-        key = next((a["key"] for a in candidates if a["key"] in state["text"]), None)
+        requested_key = next((k for k, rx in {"T1":r"안내문|공지", "T2":r"FAQ|에프에이큐", "T3":r"표|리워드", "T5":r"푸시"}.items() if re.search(rx,state["text"],re.I)), None)
+        key = next((a["key"] for a in candidates if a["key"] in state["text"]), requested_key)
         a = next((a for a in candidates if a["key"] == key), candidates[0] if candidates else None)
         if not a:
             return {}
@@ -833,6 +852,8 @@ def propose_fix(state: WorkState) -> dict:
                 "review": {"artifact_key": a["key"], "opinion": opinion}}
     if not state.get("targets"):
         return {"fixes": [], "fix_index": 0, "fix_results": []}
+    if state.get("target_source") == "llm":
+        gw.post(f"/runs/{state['run_id']}/targets", {"targets":state["targets"]})
     p = mcp(state, "get_planted_error", {"error_ids": state["targets"]})
     ops_by_art: dict[str, list[dict]] = {}
     for it in (p.get("data") or {}).get("items", []):
@@ -843,6 +864,10 @@ def propose_fix(state: WorkState) -> dict:
         a = arts.get(key)
         if not a or a.get("owner") not in ("COLLEAGUE", "SPLIT"):
             continue
+        read = mcp(state, "read_artifact", {"artifact_key":key})
+        results.append({"tool":"read_artifact","args":{"artifact_key":key},"payload":read})
+        if read.get("ok"):
+            a = {**a, **read["data"]}
         new = _apply_ops(a["body"], ops)
         if new != a["body"]:
             args = {"artifact_key": key, "base_version": a["version"], "content": new, "targets": state["targets"]}

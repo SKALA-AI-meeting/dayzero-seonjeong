@@ -37,7 +37,7 @@ def lock_session(c, sid: str, p: Principal | None = None, *, require_active: boo
         if p.role == "CANDIDATE" and p.session_id != str(s["id"]):
             raise ApiError(404, "NOT_FOUND", "세션을 찾을 수 없습니다")
     if require_active:
-        if s["status"] == "SUBMITTED":
+        if s["status"] == "SUBMITTED" or (s["status"] == "ACTIVE" and elapsed_seconds(s) >= 3600):
             raise ApiError(409, "SESSION_SUBMITTED", "종료된 세션은 변경할 수 없습니다")
         if s["status"] != "ACTIVE":
             raise ApiError(403, "FORBIDDEN", "동의와 시작 이후에 사용할 수 있습니다")
@@ -62,6 +62,8 @@ def record_action(c, sid: str, actor: str, kind: str, entity_id: str | None = No
                   payload: dict | None = None, *, turn: int | None = None) -> int:
     row = one(c, "UPDATE sessions SET last_action_seq=last_action_seq+1 WHERE id=%s RETURNING last_action_seq, turn_count", (sid,))
     seq = row["last_action_seq"]
+    session = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
+    payload = {"elapsed_seconds":elapsed_seconds(session), "event_id":(session.get("scenario_state") or {}).get("active_event"), **(payload or {})}
     c.execute("INSERT INTO actions(session_id,seq,actor,kind,entity_id,payload,turn) VALUES (%s,%s,%s,%s,%s,%s,%s)",
               (sid, seq, actor, kind, entity_id, J(payload or {}), row["turn_count"] if turn is None else turn))
     return seq

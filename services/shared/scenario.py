@@ -80,6 +80,14 @@ def correct_tokens(sc: dict | None = None) -> list[str]:
 
 def claim_kind(text: str, sc: dict | None = None) -> str | None:
     """SPECIFIC(심어둔 오류·E2 변경을 지목) / WRONG(브리프의 맞는 내용을 틀렸다고 함) / None(지목 대상 없음)."""
+    normalized = normalize_expression(text)
+    correct_mentioned = any(normalize_expression(token).replace(" ", "") in normalized.replace(" ", "") for token in correct_tokens(sc) if not token.startswith("11/2"))
+    wrong_values = bool(re.search(r"5000P|11/31|31일|가족|쏴드림", normalized, re.I))
+    if correct_mentioned and NEG_CLAIM.search(text) and not MISSING.search(text) and not wrong_values:
+        return "WRONG"
+    proposed = re.search(r"(\d+)P(?:으)?로\s*(?:고쳐|바꿔|수정)", normalized)
+    if proposed and proposed[1] not in ("3000", "2000"):
+        return "WRONG"
     tg = targets_in(text)
     if any(t.startswith("PE-") for t in tg):
         return "SPECIFIC"

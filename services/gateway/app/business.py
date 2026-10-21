@@ -42,9 +42,10 @@ def get_next_event(c, s: dict) -> dict:
     st = state(s)
     out = {"turn_count": s["turn_count"], "active_event": st.get("active_event"), "awaiting": st.get("awaiting"), "next": None}
     if nxt:
-        at = nxt["trigger"].get("at")
-        out["next"] = {"id": nxt["id"], "type": nxt["type"], "trigger": nxt["trigger"], "elapsed_seconds": elapsed_seconds(s),
-                       "turns_until": None if at is None else max(0, at - s["turn_count"]),
+        from .engine import event_window, occurred
+        window = event_window(nxt, occurred(c, str(s["id"])))
+        out["next"] = {"id": nxt["id"], "type": nxt["type"], "trigger": nxt["trigger"],
+                       "seconds_until": None if window is None else max(0, window[0]-elapsed_seconds(s)),
                        "optional": bool(nxt.get("optional"))}
     return out
 

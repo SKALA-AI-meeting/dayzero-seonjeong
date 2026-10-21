@@ -210,10 +210,9 @@ def no_response(c, s: dict, sc: dict) -> None:
         who = {"E4": "박준호 팀장"}.get(ev["id"], "한서윤")
         post_line(c, sid, "SYSTEM", f"{who}님의 메시지에 아직 답하지 않았습니다.",
                   meta={"kind": "REMINDER", "event_id": ev["id"]})
-        aw.update({"reminded": True, "reminded_seconds": elapsed_seconds(s)})
+        aw.update({"reminded": True, "reminded_seconds": aw.get("since_seconds",0) + pol["remind_after_minutes"]*60})
         st["awaiting"] = aw
         set_state(c, s, st)
-        return
     if aw["reminded"] and elapsed_seconds(s) - aw.get("reminded_seconds", aw.get("since_seconds", 0)) >= pol["advance_after_minutes"] * 60:
         observe(c, sid, "RS-3", ev["id"], {"kind": "event", "id": ev["id"]}, "리마인드 후에도 무응답 → 다음 단계로 자동 진행")
         st["awaiting"] = None
@@ -230,7 +229,7 @@ def no_response(c, s: dict, sc: dict) -> None:
 
 
 def e2_reminder(c, s: dict, sc: dict) -> None:
-    """E2 NOT_REFLECTED: E2 후 3턴이 지나도 지원자 담당 산출물에 2,000P가 없으면 서윤이 1회 리마인드."""
+    """E2 NOT_REFLECTED: E2 후 3분이 지나도 지원자 담당 산출물에 2,000P가 없으면 서윤이 1회 리마인드."""
     st = state(s)
     if st.get("e2_reminded"):
         return

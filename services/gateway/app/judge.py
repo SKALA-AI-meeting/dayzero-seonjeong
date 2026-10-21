@@ -105,11 +105,12 @@ def judge_session(c, s: dict) -> None:
     # Review response is a neutral fact, including no response before submission.
     for review in all_(c, "SELECT payload, turn, id FROM actions WHERE session_id=%s AND kind='ARTIFACT_READ'", (sid,)):
         key = review["payload"].get("key")
-        if not one(c, "SELECT 1 FROM observations WHERE session_id=%s AND code='CO+7'", (sid,)):
+        if not one(c, "SELECT 1 FROM observations WHERE session_id=%s AND code='CO+7' AND run_id::text=%s", (sid, review['payload'].get('run_id'))):
             continue
         later = next((m for m in cand if m["turn"] > review["turn"]), None)
         applied = any(r["actor"] == "CANDIDATE" and r["key"] == key and r["turn"] > review["turn"] for r in revs)
-        retained = later and re.search(r"유지|그대로|때문|라서|이유", later["content"])
+        applied = applied or bool(one(c, "SELECT 1 FROM approvals WHERE session_id=%s AND run_id::text=%s AND status='APPLIED'", (sid,review["payload"].get("run_id"))))
+        retained = later and re.search(r"검토|의견|피드백|말씀|유지|그대로", later["content"]) and re.search(r"때문|라서|이유|위해", later["content"])
         note = "서윤 검토 의견을 반영함" if applied else ("이유를 들어 유지함" if retained else "반응 없음")
         ref = {"kind":"message","id":str(later["id"])} if retained else {"kind":"action","id":str(review["id"])}
         observe(c,sid,"CO·N2",event_at(review["turn"]),ref,note,subject=key)

@@ -1,6 +1,6 @@
 """DB job worker: claims AGENT / REPORT jobs via gateway internal API (1s poll, single worker).
 
-이벤트는 시간이 아니라 턴으로 발생하므로(gateway engine) 별도 타이머 스레드가 없다.
+시험 시계와 자동 제출은 gateway의 주기 tick이 담당한다.
 """
 from __future__ import annotations
 

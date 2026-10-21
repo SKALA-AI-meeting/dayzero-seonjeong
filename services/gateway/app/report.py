@@ -52,21 +52,21 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
 
     def event_of(o: dict, ev: dict) -> str | None:
         """기록된 이벤트가 없으면(이전 세션의 종료 시 규칙 판정) 근거가 생긴 턴 기준으로 채운다."""
-        return o["event_id"] or (event_at(ev["turn"]) if ev.get("turn") is not None and ev.get("kind") in ("message", "revision") else None)
+        return o["event_id"] or ev.get("event_id") or (event_at(ev["turn"]) if ev.get("turn") is not None and ev.get("kind") in ("message", "revision") else None)
 
     def evidence(ref: dict) -> dict:
         kind, rid = ref.get("kind"), str(ref.get("id"))
         if kind == "message" and rid in by_msg:
             m = by_msg[rid]
             return {"kind": "message", "id": rid, "actor": ACTOR_LABEL[m["actor"]], "quote": m["content"][:400], "turn": m["turn"],
-                    "elapsed_seconds": (m["meta"] or {}).get("elapsed_seconds", 0), "at": m["created_at"].astimezone(KST).strftime("%H:%M")}
+                    "elapsed_seconds": (m["meta"] or {}).get("elapsed_seconds", 0), "at": f"{int((m['meta'] or {}).get('elapsed_seconds',0))//60:02d}:{int((m['meta'] or {}).get('elapsed_seconds',0))%60:02d}"}
         if kind == "revision" and rid in by_rev:
             r = by_rev[rid]
             return {"kind": "revision", "id": rid, "actor": ACTOR_LABEL[r["actor"]], "artifact": f"{r['key']} {r['title']}",
                     "diff": _diff(r["body_before"], r["body_after"]), "turn": r["turn"], "elapsed_seconds": (r["meta"] or {}).get("elapsed_seconds", 0)}
         if kind == "action" and rid in acts:
             a = acts[rid]
-            return {"kind": "action", "id": rid, "action": a["kind"], "entity": a["entity_id"], "payload": a["payload"], "turn": a["turn"]}
+            return {"kind": "action", "id": rid, "action": a["kind"], "entity": a["entity_id"], "payload": a["payload"], "turn": a["turn"], "elapsed_seconds": a["payload"].get("elapsed_seconds",0), "event_id":a["payload"].get("event_id")}
         return {"kind": kind, "id": rid}
 
     competencies = []
@@ -116,7 +116,7 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
         "raw": {
             "messages": [{"id": str(m["id"]), "actor": ACTOR_LABEL[m["actor"]], "content": m["content"], "turn": m["turn"],
                           "kind": (m["meta"] or {}).get("kind"), "event_id": (m["meta"] or {}).get("event_id"),
-                          "label": (m["meta"] or {}).get("label"), "at": m["created_at"].astimezone(KST).strftime("%H:%M")} for m in msgs],
+                          "label": (m["meta"] or {}).get("label"), "at": f"{int((m['meta'] or {}).get('elapsed_seconds',0))//60:02d}:{int((m['meta'] or {}).get('elapsed_seconds',0))%60:02d}"} for m in msgs],
             "revisions": [{"id": str(r["id"]), "artifact": f"{r['key']} {r['title']}", "actor": ACTOR_LABEL[r["actor"]],
                            "version": r["version"], "turn": r["turn"], "diff": _diff(r["body_before"], r["body_after"])} for r in revs],
             "approvals": approvals,

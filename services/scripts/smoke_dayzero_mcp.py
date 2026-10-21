@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import os
 
 import httpx2
 from mcp import Client
@@ -17,7 +18,7 @@ from mcp.client.streamable_http import streamable_http_client
 from shared.config import ROOT, settings
 
 S = settings()
-URL = "http://localhost:9103/mcp"
+URL = os.environ.get("DAYZERO_MCP_URL", "http://localhost:9103/mcp")
 NOTICE = "근거 조회용 도구입니다. 합격·탈락 결정은 평가자가 합니다."
 BANNED_TOOLS = ("rank", "score", "screen", "pass", "fail", "reject", "fit")
 results: list[tuple[str, bool, str]] = []
@@ -35,7 +36,8 @@ def http(token: str | None) -> Client:
 
 
 def stdio(token: str | None) -> Client:
-    env = {"DAYZERO_TOKEN": token} if token else {}
+    env = {k:v for k,v in os.environ.items() if k in ("GATEWAY_INTERNAL_URL","INTERNAL_SERVICE_SECRET")}
+    if token: env["DAYZERO_TOKEN"]=token
     return Client(StdioServerParameters(command="uv", args=["run", "python", "-m", "dayzero_mcp.server", "--stdio"],
                                         cwd=str(ROOT / "services"), env=env))
 
@@ -54,7 +56,7 @@ async def exercise(mode: str, client: Client) -> None:
               ", ".join(f"{i['alias']}" for i in items[:6]))
         ev = [e for i in items for e in i["evidence"]]
         check(f"[{mode}] 각 지원자에 근거 원문·경과 시간·연결 조항", items and all(i["evidence"] for i in items)
-              and all(e["quote"] for e in ev) and all(e.get("elapsed_seconds") or e["evidence_kind"] != "message" for e in ev)
+              and all(e["quote"] for e in ev) and all(e.get("elapsed_seconds") is not None or e["evidence_kind"] != "message" for e in ev)
               and all(e.get("linked_criterion") for e in ev), (ev[0]["quote"] or "")[:40] if ev else "")
         check(f"[{mode}] 결과에 점수·합불 필드 없음", not any(k in str(d) for k in ("'score'", "합격 여부", "부적합", "'rank'")))
         r = await c.call_tool("find_candidates_by_behavior", {"code": "CO+5", "event_id": "E0"})
@@ -63,9 +65,9 @@ async def exercise(mode: str, client: Client) -> None:
         r = await c.call_tool("find_candidates_by_behavior", {"code": "CO·N1", "event_id": "E0"})
         rv = [e for i in (r.structured_content["data"]["items"] if not r.is_error else []) for e in i["evidence"]]
         check(f"[{mode}] event_id(E0)로 거르면 문서 수정(revision) 근거도 잡힘·경과 시간 있음",
-              any(e["evidence_kind"] == "revision" for e in rv) and all(e["event_id"] == "E0" and e["elapsed_seconds"] for e in rv),
+              any(e["evidence_kind"] == "revision" for e in rv) and all(e["event_id"] == "E0" and e["elapsed_seconds"] is not None for e in rv),
               f"{len(rv)}건, 예: {rv[0]['elapsed_seconds']} {rv[0]['event_id']}" if rv else "0건")
-        check(f"[{mode}] 모든 근거에 event_id·elapsed_seconds(메시지·문서 수정)", all(e["event_id"] and e["elapsed_seconds"]
+        check(f"[{mode}] 모든 근거에 event_id·elapsed_seconds(메시지·문서 수정)", all(e["event_id"] and e["elapsed_seconds"] is not None
               for e in ev if e["evidence_kind"] in ("message", "revision")))
         sid = items[0]["session_id"] if items else "none"
         r = await c.call_tool("get_candidate_report", {"session_id": sid})

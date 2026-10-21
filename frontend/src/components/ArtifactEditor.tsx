@@ -49,7 +49,7 @@ export function ArtifactEditor({ sessionId, artifacts, readOnly, onSaved }: {
       <section className="section-card" aria-labelledby={`art-${a.key}`}>
         <div className="row"><h3 id={`art-${a.key}`}>{a.key} {a.title}</h3><span className="spacer" /><span className="badge num">v{a.version}</span></div>
         <p className="help">{ARTIFACT_HINT[a.key]}</p>
-        {a.change && <details className="alert info" open><summary>서윤 문서 수정 · v{a.change.version}</summary>
+        {a.change && <details style={{ padding: 12, border: "1px solid var(--color-border)", borderRadius: 8, background: "var(--color-info-soft)" }} open><summary style={{ marginBottom: 8, fontWeight: 600 }}>서윤 문서 수정 · v{a.change.version}</summary>
           <div style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}><del>{a.change.before || "(없음)"}</del><span aria-label="에서 다음으로"> → </span><ins>{a.change.after || "(삭제)"}</ins></div>
         </details>}
         <label htmlFor={`art-body-${a.key}`} className="sr-only">{a.title}</label>
