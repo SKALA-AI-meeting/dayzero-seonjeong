@@ -86,9 +86,10 @@ PERSONAS = [("persona-model", model), ("persona-solo", solo), ("persona-avoid", 
 
 
 def relink(adm: httpx.Client) -> None:
-    """회사 기준 조항이 없는 기존 READY 리포트(이 기능 이전 세션)를 기본 회사 기준으로 다시 생성."""
+    """회사 기준 조항이 없거나 이전 형식인 READY 리포트를 기본 회사 기준으로 다시 생성."""
     for x in adm.get("/sessions").json()["items"]:
-        if x["report_status"] != "READY" or (adm.get(f"/reports/{x['id']}").json().get("body") or {}).get("company"):
+        body = adm.get(f"/reports/{x['id']}").json().get("body") or {} if x["report_status"] == "READY" else {}
+        if not body or (body.get("company") and "'score'" not in str(body)):  # 회사 기준 없음 또는 이전 형식(score 저장)만
             continue
         adm.post(f"/reports/{x['id']}/retry", json={"company_id": S.default_company_id})
         for _ in range(60):

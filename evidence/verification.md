@@ -90,3 +90,18 @@ live 오분류 6건(수정하지 않음):
 | fixture 회귀 | — | pytest 6/6 · smoke_mcp 35/35 · smoke_flow 51/51 · Harness 8/8(H-GUARD에 규칙 판정·브리프 대조 검사 추가) · tsc/eslint 통과 · 큐 잔재 0건 | — |
 
 개선 중 한 번 생긴 부작용(이벤트 라벨 우선이 과해 잡담·모호한 지적이 HELP_NOW로 감, 4건)은 프롬프트 조건과 "규칙이 지목 대상을 찾으면 이벤트 라벨보다 우선"으로 해소했다. 평가셋이 22건으로 작아 실제 지원자 표현 전반의 정확도를 보장하지는 않는다.
+
+## MCP 최소 조각(company-mcp 바꿔 꽂기 · dayzero-mcp) 검증 — 2026-10-21
+
+조건: fixture 모드(`LLM_MODE=fixture`), 기존 DB 유지, 서비스 로컬 실행 + company-mcp 2개(:9201 A사, :9202 B사) + dayzero-mcp(:9103). 시연 세션은 `scripts.seed_candidates`(페르소나 4명).
+
+| 항목 | 결과 | 근거 |
+|---|---|---|
+| smoke_company_mcp: A사·B사에 같은 질의 → 서로 다른 조항 | PASS 25/25 | CO·N1 A 4.1 '직접 고쳐 속도 내기' ↔ B 4.1 '담당자 공유 의무', CO+5 A 4.2 '솔직한 피드백' ↔ B 4.2 '근거 기반 정정 요청', RS+1 A 1.1 '문제의 빠른 공유' ↔ B 1.1 '투명한 진행 상황 보고' |
+| 같은 세션 리포트 A사 → B사 재생성 시 linked_criterion 변경 | PASS | persona-solo 8개 코드 모두 B사 조항으로 바뀜, 관찰 코드·근거는 동일. 화면 [A사](screens/report-company-a.png) · [B사](screens/report-company-b.png) |
+| `grep -rn "a-startup\|b-finance" services/agent` | PASS 0건 | Agent는 job 입력 URL만 받음 |
+| smoke_dayzero_mcp: 두 도구·Resource(HTTP·stdio), 토큰 없음/틀린 토큰 거부 | PASS 28/28 | find_candidates_by_behavior(CO·N1) → persona-blame·persona-solo·smoke 세션, 근거 원문·가상 시각·연결 조항 포함, 점수·순위 필드 없음 |
+| 회귀 pytest / smoke_mcp / smoke_flow fixture / Harness | PASS 6/6 · 35/35 · 51/51 · 8/8 | 첫 smoke_flow는 50/51 — 리포트 linked_criterion에 검색 유사도 `score`가 들어가 '점수 없음' 검사에 걸림 → 리포트 본문에서 score 제거(MCP 검색 결과에는 유지) 후 51/51 |
+| tsc / eslint(리포트 화면) | PASS | |
+
+참고: `seed_candidates --relink`로 기존 READY 리포트(smoke-live 포함)를 fixture 모드에서 A사 기준으로 다시 생성했다. 이 때문에 smoke-live 리포트의 live AI 요약(evidence_summary)은 DB에서 빠졌다(관찰 코드·근거는 규칙 기반이라 동일).

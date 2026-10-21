@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Day Zero 로컬 실행(검증된 방법): DB 컨테이너 + 서비스 5개를 한 번에 띄운다.
+# Day Zero 로컬 실행(검증된 방법): DB 컨테이너 + 서비스 5개 + company-mcp 2개 + dayzero-mcp를 한 번에 띄운다.
 #   사용: ./infra/dev-up.sh            (agent fixture 모드, 기본은 .env의 LLM_MODE)
 #         LLM_MODE=live ./infra/dev-up.sh  (실제 gpt-4o-mini, OPENAI_API_KEY 필요)
 # 이미 떠 있는 서비스(포트 사용 중)는 건너뛴다. 로그: .run/logs/*.log, PID: .run/*.pid
@@ -42,6 +42,9 @@ start() { # name port dir cmd...
 start gateway      8000 services uv run uvicorn gateway.app.main:app --host 127.0.0.1 --port 8000
 start business-mcp 9101 services uv run python -m business_mcp.server
 start rag-mcp      9102 services uv run python -m rag_mcp.server
+start company-mcp-a 9201 services uv run python -m company_mcp.server --company-dir ../data/companies/a-startup --port 9201
+start company-mcp-b 9202 services uv run python -m company_mcp.server --company-dir ../data/companies/b-finance --port 9202
+start dayzero-mcp  9103 services uv run python -m dayzero_mcp.server
 sleep 4
 start agent        8001 services env LLM_MODE="${LLM_MODE:-$(grep -E '^LLM_MODE=' .env | cut -d= -f2)}" uv run uvicorn agent.app.main:app --host 127.0.0.1 --port 8001
 start web          3100 frontend npm run dev

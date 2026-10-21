@@ -69,6 +69,7 @@ async def exercise(mode: str, client: Client) -> None:
               and any(o.get("linked_criterion") for o in obs) and rep.get("company", {}).get("company_id"),
               f"{rep.get('alias')} company={rep.get('company', {}).get('company_id')} codes={len(obs)}")
         check(f"[{mode}] LLM 추정 표시 필드(estimated) 포함", obs and all("estimated" in o for o in obs))
+        check(f"[{mode}] 리포트에 점수(score)·순위 필드 없음", not any(k in str(rep) for k in ("'score'", "'rank'")))
         rr = await c.read_resource(f"report://{sid}")
         check(f"[{mode}] resources/read report://{{session_id}}", sid in rr.contents[0].text)
         r = await c.call_tool("get_candidate_report", {"session_id": "00000000-0000-0000-0000-000000000000"})

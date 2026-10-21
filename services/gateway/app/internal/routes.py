@@ -507,7 +507,7 @@ class CriteriaIn(Strict):
 @router.post("/reports/{sid}/criteria")
 def report_criteria(sid: str, body: CriteriaIn):
     """관찰 코드마다 회사 조항(company-mcp search_criteria 상위 1개)을 linked_criterion으로 붙이고 READY.
-    연결은 근거 첨부일 뿐 판정이 아니다. 조항 원문(quote)은 바꾸지 않는다."""
+    연결은 근거 첨부일 뿐 판정이 아니다. 조항 원문(quote)은 바꾸지 않는다. 검색 유사도(score)는 지원자 점수로 오해될 수 있어 저장하지 않는다."""
     with tx(dsn()) as c:
         rep = one(c, "SELECT * FROM reports WHERE id=%s AND session_id=%s FOR UPDATE", (body.report_id, sid))
         if not rep or not rep["body"]:
@@ -521,7 +521,7 @@ def report_criteria(sid: str, body: CriteriaIn):
             if 0 <= ln.index < len(obs) and cr.get("quote"):
                 doc = cr.get("doc_title") or cr.get("doc_id")
                 obs[ln.index]["linked_criterion"] = {
-                    **{k: cr.get(k) for k in ("company_id", "company_name", "doc_id", "doc_title", "section", "title", "quote", "score", "uri")},
+                    **{k: cr.get(k) for k in ("company_id", "company_name", "doc_id", "doc_title", "section", "title", "quote", "uri")},
                     "text": f"이 행동은 귀사 「{doc}」 {cr.get('section')} '{cr.get('title')}' 조항과 관련됩니다"}
                 n += 1
         b["company"] = {"company_id": body.company_id, "company_name": body.company_name, "linked": n,

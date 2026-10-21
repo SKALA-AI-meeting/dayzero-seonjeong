@@ -108,6 +108,10 @@ AI 동료 한서윤, 박준호 팀장은 가상 인물이다.
 
 ## 11. 내일 팀원에게 넘길 TODO
 
+- [ ] **MCP 2단계(이번 MVP에서 하지 않음):** `rank_for_review`, `get_screening_summary`, 4구간 자동 분류, 관리자 분류 화면, 감사 로그, 편향 점검, AI 평가자 패널, company-mcp의 `get_rubric`·`company_lens` — 2단계 지시문(dayzero_phase2_prompt.md) 4장 참조
+- [ ] **company-mcp 조항 연결 품질:** 다국어 MiniLM이 짧은 한국어 조항 구분에 약해 표현(2-gram) 비중 0.6으로 보완. 코드북 정의 기준으로는 맞지만 근거 원문이 긴 경우 빗나갈 수 있음 — 회사 문서가 늘면 코드별 연결 평가셋 필요
+- [ ] **dayzero-mcp 권한 범위:** 평가자 토큰 1개(전체 세션 조회). 평가자별 토큰·회사(tenant)별 범위 제한 필요
+
 - [ ] **리허설 1회(D8):** 턴 수·대사 길이·E2B→E3 간격 조정. 트리거 턴은 `scenario.json`만 바꾸면 된다
 - [ ] **분류 평가셋 확장:** live 분류는 `evals/classifier-v1.json` 22건 기준 22/22(회귀 6/6). 리허설에서 나온 실제 지원자 문장을 평가셋에 계속 추가하고 `uv run python -m scripts.classify_check`로 확인
 - [ ] **분기 분류 오분류 테스트:** fixture 규칙 분류(`graph.py` RULES)와 live 분류기 각각 라벨별 예문 세트로 확인. 특히 OUT_OF_SCOPE_REQUEST·WRONG_CRITICISM은 fixture에서 거의 안 잡힘

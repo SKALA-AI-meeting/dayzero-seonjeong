@@ -10,7 +10,7 @@ import { COPY } from "@/lib/types";
 type Evidence = { kind: string; id: string; actor?: string; quote?: string; at?: string; turn?: number; artifact?: string; diff?: string[];
   action?: string; entity?: string };
 type Criterion = { company_id: string; company_name: string | null; doc_id: string; doc_title: string | null; section: string; title: string;
-  quote: string; score: number; text: string };
+  quote: string; text: string };
 type Obs = { code: string; definition: string; polarity: "positive" | "caution" | "neutral"; event_id: string | null; subject: string | null;
   note: string | null; source: "AGENT" | "RULES"; estimated?: boolean; evidence: Evidence; linked_criterion?: Criterion };
 type Comp = { key: string; label: string; status: "OBSERVED" | "INSUFFICIENT" | "NO_OPPORTUNITY"; status_label: string;
