@@ -1,0 +1,97 @@
+{
+  "mode": "live",
+  "checks": [
+    {
+      "name": "health mode",
+      "passed": true
+    },
+    {
+      "name": "initial provisional card is unconfirmed",
+      "passed": true
+    },
+    {
+      "name": "split request creates response run",
+      "passed": true
+    },
+    {
+      "name": "card confirms exactly accepted proposal",
+      "passed": true
+    },
+    {
+      "name": "board matches confirmed owners",
+      "passed": true
+    },
+    {
+      "name": "confirmation passes validation without fallback",
+      "passed": true
+    },
+    {
+      "name": "reply matches all confirmed owners and FAQ counts",
+      "passed": true
+    },
+    {
+      "name": "does not reopen or recap split without candidate request",
+      "passed": true
+    },
+    {
+      "name": "split request creates response run",
+      "passed": true
+    },
+    {
+      "name": "imbalanced proposal remains negotiating, never confirmed",
+      "passed": true
+    },
+    {
+      "name": "pushback passes validation without fallback",
+      "passed": true
+    },
+    {
+      "name": "pushback is one question without acceptance",
+      "passed": true
+    },
+    {
+      "name": "split request creates response run",
+      "passed": true
+    },
+    {
+      "name": "card confirms exactly accepted proposal",
+      "passed": true
+    },
+    {
+      "name": "board matches confirmed owners",
+      "passed": true
+    },
+    {
+      "name": "confirmation passes validation without fallback",
+      "passed": true
+    },
+    {
+      "name": "reply matches all confirmed owners and FAQ counts",
+      "passed": true
+    },
+    {
+      "name": "split request creates response run",
+      "passed": true
+    },
+    {
+      "name": "card confirms exactly accepted proposal",
+      "passed": true
+    },
+    {
+      "name": "board matches confirmed owners",
+      "passed": true
+    },
+    {
+      "name": "confirmation passes validation without fallback",
+      "passed": true
+    },
+    {
+      "name": "reply matches all confirmed owners and FAQ counts",
+      "passed": true
+    },
+    {
+      "name": "fourth proposal defaults rather than confirming submitted proposal",
+      "passed": true
+    }
+  ]
+}

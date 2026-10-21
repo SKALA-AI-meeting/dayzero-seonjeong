@@ -27,6 +27,7 @@ def session_context(c, s: dict) -> dict:
     return {"turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s), "phase": s["phase"],
             "active_event": st.get("active_event"), "colleague": st.get("colleague"),
             "split_confirmed": bool((st.get("split") or {}).get("confirmed")),
+            "assignment_status":"확정" if (st.get("split") or {}).get("confirmed") else "임시(미확정)",
             "tasks": tasks, "artifacts": arts, "events": occ}
 
 

@@ -50,8 +50,6 @@ def split(sid: str, body: SplitIn, p: Principal = Depends(candidate)):
             raise ApiError(409, "VERSION_CONFLICT", "분업이 이미 확정되었습니다")
         if active_run(c, sid):
             raise ApiError(409, "RUN_BUSY", "답장을 기다리는 중입니다")
-        sc = scenario_def(c, s)
-        max_rounds = next(e for e in sc["events"] if e["id"] == "E0")["negotiate"]["max_rounds"]
         proposal = body.proposal.model_dump()
         turn = engine.add_turn(c, s)
         sp = {**sp, "rounds": sp["rounds"] + 1}
@@ -63,10 +61,6 @@ def split(sid: str, body: SplitIn, p: Principal = Depends(candidate)):
         seq = record_action(c, sid, "CANDIDATE", "SPLIT_PROPOSED", sp.get("message_id"),
                             {"proposal": proposal, "round": sp["rounds"], "comment": body.comment})
         action_id = str(one(c, "SELECT id FROM actions WHERE session_id=%s AND seq=%s", (sid, seq))["id"])
-        if sp["rounds"] > max_rounds:
-            engine.confirm_split(c, s, engine.default_split(sc), label="DEFAULT_FALLBACK", sc=sc)
-            engine.tick(c, s)
-            return {"split": engine.public_split(engine.state(s)), "run_id": None}
         run = create_run(c, sid, input_={"type": "split", "proposal": proposal, "round": sp["rounds"], "comment": body.comment,
                                          "event_id": "E0", "turn": turn, "action_id": action_id})
     return {"split": engine.public_split(st), "run_id": str(run["id"])}

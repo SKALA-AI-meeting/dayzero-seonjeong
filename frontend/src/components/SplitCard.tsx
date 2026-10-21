@@ -35,7 +35,7 @@ export function SplitCard({ proposal, active, confirmed, rounds, maxRounds, onPr
     <div className="card stack" role="group" aria-label="업무 분담">
       <div className="row">
         <h4>업무 분담</h4><span className="spacer" />
-        {confirmed ? <span className="badge success">확정됨</span> : <span className="badge warning">논의 중 · {rounds}/{maxRounds}회 제안</span>}
+        {confirmed ? <span className="badge success">확정됨</span> : <span className="badge warning">협의 중 · {rounds}/{maxRounds}회 제안</span>}
       </div>
       <div className="table-wrap">
         <table>
@@ -57,7 +57,7 @@ export function SplitCard({ proposal, active, confirmed, rounds, maxRounds, onPr
       {active && (
         <div className="row">
           <button className="btn btn-primary btn-sm" disabled={busy} onClick={submit}>이렇게 나눠요</button>
-          <span className="muted">서윤 님이 답한 뒤 확정됩니다. 확정된 담당은 태스크 보드에 반영됩니다.</span>
+          <span className="muted">제안이 수락되면 확정됩니다. 조정 질문이 오면 협의 중 상태로 다시 제안할 수 있습니다.</span>
         </div>
       )}
     </div>

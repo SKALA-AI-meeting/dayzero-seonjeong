@@ -136,7 +136,7 @@ def run_context(rid: str):
         arts = all_(c, "SELECT * FROM artifacts WHERE session_id=%s ORDER BY key", (sid,))
         occ = all_(c, "SELECT event_id, turn, skipped FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
         pb = st.get("pushback") or {}
-        allow = {"E0": not pb.get("E0") and ev_id == "E0", "E2": not pb.get("E2") and ev_id in ("E2", "E2B")}
+        allow = {"E0": not pb.get("E0") and ev_id == "E0" and not (st.get("split") or {}).get("confirmed"), "E2": not pb.get("E2") and ev_id in ("E2", "E2B")}
         revs = all_(c, """SELECT a.key, r.actor, r.turn FROM artifact_revisions r JOIN artifacts a ON a.id=r.artifact_id
                           WHERE r.session_id=%s ORDER BY r.created_at""", (sid,))
         part = one(c, "SELECT alias FROM participants WHERE id=%s", (s["participant_id"],))

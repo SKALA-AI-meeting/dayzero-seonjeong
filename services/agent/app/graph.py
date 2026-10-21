@@ -18,6 +18,7 @@ from shared.config import POLICY_VERSION, settings
 from shared.scenario import claim_kind, contradicts_brief, targets_in, contextual_targets, normalize_expression
 
 from . import harness as H
+from .split_reply import assignment_text, split_context, split_fallback, split_violations, split_prompt_context
 from .clients import Gateway, call_tool, get_prompt, list_read_tools
 
 S = settings()
@@ -34,6 +35,7 @@ class WorkState(TypedDict, total=False):
     run_type: str
     policy_version: str
     ctx: dict
+    split_decision: dict
     phase: str
     event_id: str | None
     to: str
@@ -140,13 +142,20 @@ def negotiate(state: WorkState) -> dict:
     """E0 분업 제안 분기(결정적). 불균형 분업 반문은 allow_pushback.E0일 때 1회, 이후에도 유지하면 CO-2."""
     inp = state["ctx"]["run"]["input"]
     p, label = inp["proposal"], _split_label(inp["proposal"])
-    split = state["ctx"]["state"].get("split") or {}
     allow = state["ctx"]["allow_pushback"]["E0"]
     br = _branch(state, "E0", label) or {}
     ref = {"kind": "action", "id": inp["action_id"]}
     out: dict[str, Any] = {"phase": "negotiate", "label": label, "labels": ["BALANCED_SPLIT", "ONE_SIDED_SPLIT", "TAKE_ALL"],
                            "reply": None, "observes": [], "effects": {}, "targets": []}
-    if label == "BALANCED_SPLIT":
+    if inp.get("round", 1) > 3:
+        from shared.scenario import scenario
+        default = state["ctx"].get("scenario", {}).get("default_split") or scenario()["default_split"]
+        fallback = {"T1":"CANDIDATE" if "T1" in default["candidate"] else "COLLEAGUE",
+                    "T3":"CANDIDATE" if "T3" in default["candidate"] else "COLLEAGUE",
+                    "faq_candidate":next(int(x.split(":")[1]) for x in default["candidate"] if x.startswith("T2:"))}
+        out["label"] = "DEFAULT_FALLBACK"
+        out["effects"] = {"split":{"label":"DEFAULT_FALLBACK","confirm":True,"proposal":fallback}}
+    elif label == "BALANCED_SPLIT":
         out["reply"] = br.get("reply")
         out["observes"] = [{"code": c, "event_id": "E0", "evidence": ref, "note": "분업 제안이 균형 있게 나뉨"} for c in br.get("observe", [])]
         out["effects"] = {"split": {"label": label, "confirm": True, "proposal": p}}
@@ -157,11 +166,14 @@ def negotiate(state: WorkState) -> dict:
         out["observes"] = [{"code": c, "event_id": "E0", "evidence": ref, "note": "재협상 기회 후에도 일방적 분업 유지"}
                            for c in br.get("observe_if_unchanged", [])]
         out["effects"] = {"split": {"label": label, "confirm": True, "proposal": p}}
-    elif label == "TAKE_ALL" and split.get("last_label") != "TAKE_ALL":
+    elif label == "TAKE_ALL" and allow:
         out["reply"] = br.get("reply")
-        out["effects"] = {"split": {"label": label, "confirm": False, "proposal": p}}
+        out["effects"] = {"pushback_used":"E0", "split": {"label": label, "confirm": False, "proposal": p}}
     else:
         out["effects"] = {"split": {"label": label, "confirm": True, "proposal": p}}  # 기록만
+    decision = out["effects"]["split"]
+    out["split_decision"] = {"decision":"DEFAULT" if out["label"]=="DEFAULT_FALLBACK" else "ACCEPT" if decision["confirm"] else "PUSHBACK",
+                             "confirmed":decision["confirm"], "proposal":decision["proposal"]}
     return out
 
 
@@ -543,6 +555,9 @@ def apply_effects(state: WorkState) -> dict:
     eff = dict(state.get("effects") or {})
     if eff or state.get("label") not in (None, "NONE"):
         gw.post(f"/runs/{state['run_id']}/branch", {"event_id": state["event_id"], "label": state.get("label") or "NONE", **eff})
+    if eff.get("split"):
+        # branch() commits the decision and board before any acknowledgement is generated.
+        return {"ctx":{**state["ctx"], **gw.get(f"/runs/{state['run_id']}/context")}}
     return {}
 
 
@@ -590,9 +605,27 @@ def _directive(state: WorkState) -> str:
             f"지원자 메시지에 짧게 답하라.")
 
 
+def reason_split(state: WorkState) -> dict:
+    split = state["ctx"]["state"]["split"]
+    if S.llm_mode != "live":
+        return {"plan":[], "answer":split_fallback(split), "reply":None}
+    messages = state.get("llm_messages") or []
+    if not messages:
+        persona = get_prompt(gw,state["run_id"],"colleague_persona",{"event_directive":"E0 분업 결정 확인", "allow_pushback":"true" if not split["confirmed"] else "false"})
+        system = persona + "\n분업 결정은 시스템이 이미 완료했다. 새로운 분업을 제안하거나 결정하지 않는다. 확정이면 담당표의 T1/T3 담당과 FAQ 양쪽 개수를 빠짐없이 정확하게 존댓말 2문장 이내로 확인한다. 미확정이면 확정/수락하지 말고 분량 조정을 요청하는 질문 한 번만 한다. 작업을 하겠다는 미래 약속은 하지 않는다."
+        messages = [{"role":"system","content":system},{"role":"user","content":json.dumps(split_prompt_context(state),ensure_ascii=False)}]
+    ai = H.with_retries(lambda:_llm().invoke(_to_lc(messages)),deadline=time.monotonic()+30)
+    _usage(state,ai)
+    messages = messages + [{"role":"assistant","content":ai.content or ""}]
+    return {"reply":None,"plan":[],"answer":ai.content or "", "llm_messages":messages,
+            "token_usage":state.get("token_usage"), "step_count":state.get("step_count",0)+1}
+
+
 @_timed
 def reason(state: WorkState) -> dict:
     """해당 분기가 없는 일반 대화. fixture는 고정 대사, live는 페르소나(MCP Prompt) + 읽기 도구."""
+    if state.get("run_type") == "split":
+        return reason_split(state)
     manager = state.get("answer_actor") == "MANAGER"
     if S.llm_mode != "live":
         answer = fixture_answer(state)
@@ -611,7 +644,11 @@ def reason(state: WorkState) -> dict:
                 system += "\n이번 지적은 브리프에 맞는 조건을 잘못됐다고 한 것이다. 이번 도구 결과의 브리프를 근거로 해당 조건이 맞다고 부드럽게 한 번 해명하고 유지한다고 말한다. 이전 금액 수정 대화로 돌아가거나 어느 부분인지 되묻지 않는다."
             if state.get("targets") and not any(r["tool"] == "edit_own_artifact" and r["payload"].get("ok") for r in state.get("tool_results", [])):
                 system += "\n이번에는 새 수정이 실행되지 않았다. 읽은 현재 작업본을 근거로 이미 반영된 상태를 설명한다. 수정했어요/수정할게요라고 말하거나 이미 특정된 대상을 되묻지 않는다."
-        user = (f"[과제] {ctx['task_summary']}\n[너의 담당] {', '.join(mine) or '아직 없음'}\n"
+        ownership_status = split_context(ctx)["status"]
+        if not manager:
+            system += "\n분업 상태가 임시(미확정)이면 보드의 이름은 확정 담당이 아니다. 분업 확정 후에는 지원자가 먼저 변경을 요청하지 않는 한 분업을 다시 제안하거나 배분을 꺼내지 않는다. 확정된 담당과 다른 담당을 말하지 않는다."
+        user = (f"[담당 상태] {ownership_status}\n[담당표] {json.dumps(split_context(ctx),ensure_ascii=False)}\n"
+                f"[과제] {ctx['task_summary']}\n[너의 담당] {', '.join(mine) or '아직 없음'}\n"
                 f"[현재 판단] {state.get('label')}\n[반문 허용] {allow}\n"
                 f"[실행 결과] {json.dumps(state.get('tool_results', []), ensure_ascii=False)}\n"
                 f"[대화 상태] {json.dumps(ctx['state'], ensure_ascii=False)}\n"
@@ -723,6 +760,7 @@ def validate_output(state: WorkState) -> dict:
     problems = H.leak_violations(normalize_expression(text), [normalize_expression(s) for s in _secrets(state)], normalize_expression(permitted))
     problems += H.validate_output(text, H.numbers_in(permitted))
     if not manager:
+        problems += split_violations(text,state)
         problems += action_violations(text, results)
         if PROMISE_READ.search(text) and not state.get("review"):
             problems.append("read_without_concrete_opinion")
@@ -744,11 +782,16 @@ def validate_output(state: WorkState) -> dict:
         count = state.get("output_rewrite_count", 0) + 1
         if S.llm_mode == "live" and count <= 2:
             msgs = list(state.get("llm_messages") or [])
-            msgs.append({"role": "user", "content": "출력 검사를 통과하지 못했어요: " + ", ".join(problems) + ". 이미 실행된 행동만 근거로 2문장 이내 다시 답하세요."})
+            correction = "출력 검사를 통과하지 못했어요: " + ", ".join(problems) + ". 이미 실행된 행동만 근거로 2문장 이내 다시 답하세요."
+            if state.get("run_type") == "split":
+                correction += " 시스템 결정과 일치하는 응답 기준: " + split_fallback(state["ctx"]["state"]["split"]) + " 담당과 FAQ 양쪽 개수를 생략하지 말고 한국어로 확인하세요."
+            msgs.append({"role":"user","content":correction})
             return {"answer": "", "llm_messages": msgs, "output_rewrite_count": count, "error_code": "OUTPUT_RETRY"}
         fallback = MANAGER_DEFER if manager else H.SAFE_FALLBACK
         if "repeated_clarification" in problems or (not manager and (clarification_topic(state) in (state["ctx"]["state"].get("clarification_topics") or []) or any(CLARIFY.search(m["content"]) for m in prev))):
             fallback = "넵, 말씀해 주신 내용은 읽었어요."
+        if state.get("run_type") == "split":
+            fallback = split_fallback(state["ctx"]["state"]["split"])
         return {"answer": fallback, "output_rewrite_count": count, "error_code": "OUTPUT_VALIDATION"}
     return {"answer": text, "error_code": None}
 
