@@ -38,9 +38,8 @@ def candidates_by_behavior(code: str = Query(min_length=2, max_length=12), event
     with tx(dsn()) as c:
         rows = all_(c, """SELECT s.id, s.submitted_at, pa.alias, r.body FROM reports r JOIN sessions s ON s.id=r.session_id
                           JOIN participants pa ON pa.id=s.participant_id
-                          WHERE r.status='READY' AND EXISTS (SELECT 1 FROM observations o WHERE o.session_id=s.id AND o.code=%s
-                                                             AND (%s::text IS NULL OR o.event_id=%s))
-                          ORDER BY s.submitted_at DESC NULLS LAST LIMIT %s""", (code, event_id, event_id, limit))
+                          WHERE r.status='READY' AND EXISTS (SELECT 1 FROM observations o WHERE o.session_id=s.id AND o.code=%s)
+                          ORDER BY s.submitted_at DESC NULLS LAST""", (code,))
     items = []
     for r in rows:
         ev = []
@@ -54,8 +53,11 @@ def candidates_by_behavior(code: str = Query(min_length=2, max_length=12), event
                            "quote": e.get("quote") or "\n".join(e.get("diff") or []) or o.get("note"),
                            "actor": e.get("actor"), "virtual_time": e.get("virtual_time"), "turn": e.get("turn"),
                            "linked_criterion": (o.get("linked_criterion") or {}).get("text")})
-        items.append({"session_id": str(r["id"]), "alias": r["alias"],
-                      "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None, "evidence": ev})
+        if ev:  # event_id는 리포트 본문 기준으로 거른다(근거 턴으로 채운 이벤트 포함)
+            items.append({"session_id": str(r["id"]), "alias": r["alias"],
+                          "submitted_at": r["submitted_at"].isoformat() if r["submitted_at"] else None, "evidence": ev})
+        if len(items) >= limit:
+            break
     return {"code": code, "event_id": event_id, "count": len(items), "items": items, "notice": NOTICE}
 
 

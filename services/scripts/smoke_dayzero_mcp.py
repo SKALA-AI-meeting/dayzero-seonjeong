@@ -60,6 +60,13 @@ async def exercise(mode: str, client: Client) -> None:
         r = await c.call_tool("find_candidates_by_behavior", {"code": "CO+5", "event_id": "E0"})
         check(f"[{mode}] event_id로 장면 좁히기", not r.is_error and all(e["event_id"] == "E0" for i in r.structured_content["data"]["items"]
                                                                           for e in i["evidence"]))
+        r = await c.call_tool("find_candidates_by_behavior", {"code": "CO·N1", "event_id": "E0"})
+        rv = [e for i in (r.structured_content["data"]["items"] if not r.is_error else []) for e in i["evidence"]]
+        check(f"[{mode}] event_id(E0)로 거르면 문서 수정(revision) 근거도 잡힘·가상 시각 있음",
+              any(e["evidence_kind"] == "revision" for e in rv) and all(e["event_id"] == "E0" and e["virtual_time"] for e in rv),
+              f"{len(rv)}건, 예: {rv[0]['virtual_time']} {rv[0]['event_id']}" if rv else "0건")
+        check(f"[{mode}] 모든 근거에 event_id·virtual_time(메시지·문서 수정)", all(e["event_id"] and e["virtual_time"]
+              for e in ev if e["evidence_kind"] in ("message", "revision")))
         sid = items[0]["session_id"] if items else "none"
         r = await c.call_tool("get_candidate_report", {"session_id": sid})
         rep = r.structured_content["data"] if not r.is_error else {}

@@ -29,6 +29,10 @@ def judge_session(c, s: dict) -> None:
     arts = {a["key"]: a for a in all_(c, "SELECT key, body FROM artifacts WHERE session_id=%s", (sid,))}
     tasks = {t["key"]: t for t in all_(c, "SELECT * FROM tasks WHERE session_id=%s", (sid,))}
     obs = all_(c, "SELECT code, event_id, subject FROM observations WHERE session_id=%s", (sid,))
+    fired = sorted(occ.values(), key=lambda o: o["turn"])
+
+    def event_at(turn: int | None) -> str | None:  # 그 턴 시점의 활성 이벤트 = 그 턴 이전에 발생한 마지막 이벤트(E0는 턴 0)
+        return next((o["event_id"] for o in reversed(fired) if o["turn"] < (turn or 0) or o["turn"] == 0), None)
     asked = {o["subject"] for o in obs if o["code"] == "CO+5"}
     any_co5 = any(o["code"] == "CO+5" for o in obs)
 
@@ -41,13 +45,13 @@ def judge_session(c, s: dict) -> None:
         if pid != "PE-4" and (removed or mentioned):
             ev = removed[0] if removed else None
             ref = {"kind": "revision", "id": str(ev["id"])} if ev else {"kind": "message", "id": str(mentioned[0]["id"])}
-            observe(c, sid, "PL+3", None, ref, f"{pid} {pe['where']} 오류 발견", subject=pid)
+            observe(c, sid, "PL+3", event_at((ev or mentioned[0])["turn"]), ref, f"{pid} {pe['where']} 오류 발견", subject=pid)
         by_cand = [r for r in removed if r["actor"] == "CANDIDATE"]
         if by_cand and pid not in asked:
-            observe(c, sid, "CO·N1", None, {"kind": "revision", "id": str(by_cand[0]["id"])},
+            observe(c, sid, "CO·N1", event_at(by_cand[0]["turn"]), {"kind": "revision", "id": str(by_cand[0]["id"])},
                     f"{pid}: 서윤 초안을 요청 없이 직접 수정", subject=pid)
         if mentioned and still and pid not in asked:
-            observe(c, sid, "CO-3", None, {"kind": "message", "id": str(mentioned[0]["id"])},
+            observe(c, sid, "CO-3", event_at(mentioned[0]["turn"]), {"kind": "message", "id": str(mentioned[0]["id"])},
                     f"{pid}를 언급했으나 종료 시까지 요청·수정 없음", subject=pid)
 
     # E2 변경 반영(end_check doc_contains 2,000P)
@@ -57,7 +61,7 @@ def judge_session(c, s: dict) -> None:
                       and TWO_K.search(r["body_after"]) and not TWO_K.search(r["body_before"])
                       and (tasks.get(r["key"]) or {}).get("owner") in ("COLLEAGUE", "SPLIT")]
         if cand_added and "E2-CHANGE" not in asked:
-            observe(c, sid, "CO·N1", None, {"kind": "revision", "id": str(cand_added[0]["id"])},
+            observe(c, sid, "CO·N1", event_at(cand_added[0]["turn"]), {"kind": "revision", "id": str(cand_added[0]["id"])},
                     "E2 변경(피초대자 2,000P)을 서윤 담당 산출물에 요청 없이 직접 반영", subject="E2-CHANGE")
         if missing and (st.get("e2_reminded") or st.get("e2b_accepted")):
             observe(c, sid, "AD-1", "E2", {"kind": "artifact", "id": ",".join(missing)},

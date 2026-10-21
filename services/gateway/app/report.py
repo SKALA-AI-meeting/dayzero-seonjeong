@@ -46,8 +46,16 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
     obs = all_(c, "SELECT * FROM observations WHERE session_id=%s ORDER BY created_at", (sid,))
     st = s["scenario_state"] or {}
 
-    def vt_at(turn: int) -> str:  # 그 턴의 가상 시각 = 그 턴까지 발생한 마지막 이벤트의 시각
-        return next((o["virtual_time"] for o in reversed(occ) if not o["skipped"] and o["turn"] <= (turn or 0)), "09:00")
+    # 지원자 행동이 턴 N을 만들고 그 턴에 이벤트가 발생하므로, 턴 N의 행동은 '턴 N 이전에 발생한' 마지막 이벤트 시점이다(E0는 턴 0)
+    def vt_at(turn: int) -> str:
+        return next((o["virtual_time"] for o in reversed(occ) if not o["skipped"] and (o["turn"] < (turn or 0) or o["turn"] == 0)), "09:00")
+
+    def event_at(turn: int | None) -> str | None:  # 그 턴 시점의 활성 이벤트
+        return next((o["event_id"] for o in reversed(occ) if not o["skipped"] and (o["turn"] < (turn or 0) or o["turn"] == 0)), None)
+
+    def event_of(o: dict, ev: dict) -> str | None:
+        """기록된 이벤트가 없으면(이전 세션의 종료 시 규칙 판정) 근거가 생긴 턴 기준으로 채운다."""
+        return o["event_id"] or (event_at(ev["turn"]) if ev.get("turn") is not None and ev.get("kind") in ("message", "revision") else None)
 
     def evidence(ref: dict) -> dict:
         kind, rid = ref.get("kind"), str(ref.get("id"))
@@ -58,7 +66,7 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
         if kind == "revision" and rid in by_rev:
             r = by_rev[rid]
             return {"kind": "revision", "id": rid, "actor": ACTOR_LABEL[r["actor"]], "artifact": f"{r['key']} {r['title']}",
-                    "diff": _diff(r["body_before"], r["body_after"]), "turn": r["turn"]}
+                    "diff": _diff(r["body_before"], r["body_after"]), "turn": r["turn"], "virtual_time": vt_at(r["turn"])}
         if kind == "action" and rid in acts:
             a = acts[rid]
             return {"kind": "action", "id": rid, "action": a["kind"], "entity": a["entity_id"], "payload": a["payload"], "turn": a["turn"]}
@@ -77,9 +85,9 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
             "related_events": [{"event_id": e, "virtual_time": fired[e]["virtual_time"], "turn": fired[e]["turn"]} for e in related],
             "observations": [{"code": o["code"], "definition": cb[o["code"]]["definition"], "polarity":
                               "neutral" if "·N" in o["code"] else ("positive" if "+" in o["code"] else "caution"),
-                              "event_id": o["event_id"], "subject": o["subject"], "note": (o["note"] or "").replace("[LLM 추정] ", ""),
+                              "event_id": event_of(o, ev), "subject": o["subject"], "note": (o["note"] or "").replace("[LLM 추정] ", ""),
                               "source": o["source"], "estimated": o["source"] == "AGENT" and (o["note"] or "").startswith("[LLM 추정]"),
-                              "evidence": evidence(o["evidence_ref"] or {})} for o in items],
+                              "evidence": ev} for o in items for ev in [evidence(o["evidence_ref"] or {})]],
             "notes": notes,
         })
 

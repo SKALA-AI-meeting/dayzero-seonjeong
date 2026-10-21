@@ -4,7 +4,7 @@ dayzero-mcp find_candidates_by_behavior가 여러 지원자를 비교해 보여 
 분류가 결정적인 fixture 모드(LLM_MODE=fixture)에서 실행한다. 이벤트 이동은 관리자 시연 기능(demo/advance)을 쓴다.
 
 uv run python -m scripts.seed_candidates            # 페르소나 4명 생성 + 회사 기준 없는 기존 READY 리포트 재생성
-uv run python -m scripts.seed_candidates --relink   # 재생성만
+uv run python -m scripts.seed_candidates --relink   # 재생성만(--all: 모든 READY 리포트를 현재 회사 기준으로 재생성)
 """
 from __future__ import annotations
 
@@ -106,29 +106,30 @@ def blame(x: Sess) -> None:
 PERSONAS = [("persona-model", model), ("persona-solo", solo), ("persona-avoid", avoid), ("persona-blame", blame)]
 
 
-def relink(adm: httpx.Client) -> None:
+def relink(adm: httpx.Client, everything: bool = False) -> None:
     """회사 기준 조항이 없거나 이전 형식인 READY 리포트를 기본 회사 기준으로 다시 생성."""
     for x in adm.get("/sessions").json()["items"]:
         body = adm.get(f"/reports/{x['id']}").json().get("body") or {} if x["report_status"] == "READY" else {}
-        if not body or (body.get("company") and "'score'" not in str(body)):  # 회사 기준 없음 또는 이전 형식(score 저장)만
+        if not body or (not everything and body.get("company") and "'score'" not in str(body)):  # 회사 기준 없음 또는 이전 형식(score 저장)만
             continue
-        adm.post(f"/reports/{x['id']}/retry", json={"company_id": S.default_company_id})
+        cid = (body.get("company") or {}).get("company_id") or S.default_company_id
+        adm.post(f"/reports/{x['id']}/retry", json={"company_id": cid})
         for _ in range(60):
             rep = adm.get(f"/reports/{x['id']}").json()
-            if rep["status"] in ("READY", "FAILED") and (rep.get("body") or {}).get("company"):
+            if rep["status"] in ("READY", "FAILED") and (rep.get("body") or {}).get("company") and rep["body"] != body:
                 break
             time.sleep(1)
         print(f"relink {x['alias']:15} {x['id']} {rep['status']} company={(rep.get('body') or {}).get('company', {}).get('company_id')}")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(); ap.add_argument("--relink", action="store_true")
+    ap = argparse.ArgumentParser(); ap.add_argument("--relink", action="store_true"); ap.add_argument("--all", action="store_true")
     args = ap.parse_args()
     B = S.app_origin + "/api/v1"
     adm = httpx.Client(base_url=B, headers={"Origin": S.app_origin}, timeout=30)
     adm.headers["X-CSRF-Token"] = adm.post("/auth/login", json={"email": S.seed_admin_email, "password": S.seed_admin_password}).json()["csrf_token"]
     if args.relink:
-        relink(adm)
+        relink(adm, args.all)
         return 0
     if httpx.get(B + "/health").json()["mode"] != "fixture":
         print("fixture 모드(LLM_MODE=fixture)에서 실행하세요")
