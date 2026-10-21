@@ -34,8 +34,32 @@ TARGET_PATTERNS = {
 }
 
 
+def normalize_expression(text: str) -> str:
+    text = re.sub(r"(?<=\d),(?=\d)", "", text)
+    text = re.sub(r"([1-9])\s*천", lambda m: str(int(m[1])*1000), text)
+    text = re.sub(r"(\d+)\s*(?:포인트|점|[pP])", r"\1P", text)
+    text = re.sub(r"(\d{1,2})월\s*(\d{1,2})일", r"\1/\2", text)
+    return text
+
+
 def targets_in(text: str) -> list[str]:
-    return [k for k, rx in TARGET_PATTERNS.items() if rx.search(text)]
+    norm = normalize_expression(text)
+    out = [k for k, rx in TARGET_PATTERNS.items() if rx.search(norm)]
+    if re.search(r"3000P|5000P|리워드.{0,15}(금액|보상)|초대\s*1?명당.*3000", norm, re.I):
+        out.append("PE-2")
+    return list(dict.fromkeys(out))
+
+
+def contextual_targets(text: str, messages: list[dict]) -> list[str]:
+    current = targets_in(text)
+    if current or claim_kind(text) == "WRONG":
+        return current
+    if re.search(r"(그거|그게|그\s*부분|아까|말한|말씀드린|그\s*표|그\s*문서)", text):
+        for msg in reversed([m for m in messages if m.get("actor") in ("CANDIDATE", "COLLEAGUE")][-6:]):
+            found = targets_in(msg["content"])
+            if found:
+                return found
+    return []
 
 
 # ---- 정정 요청 vs 사실과 다른 지적: LLM이 아니라 규칙으로 판정 ---------------------------------
@@ -121,7 +145,7 @@ def event(event_id: str, sc: dict | None = None) -> dict | None:
 
 def public_definition(sc: dict) -> dict:
     """지원자·서윤 프롬프트·get_scenario 응답용: 심어둔 오류(정답)와 내부 판정 정보를 뺀 정의."""
-    hidden = {"planted_errors", "commitment_tracking"}
+    hidden = {"planted_errors", "commitment_tracking", "brief_facts"}
     out = {k: v for k, v in sc.items() if k not in hidden}
     out["events"] = [{k: v for k, v in e.items() if k not in ("actual_state", "verify_against", "end_check")}
                      for e in sc["events"]]

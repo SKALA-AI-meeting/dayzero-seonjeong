@@ -27,7 +27,7 @@ MAX_SAME_TOOL = 3
 ACTIVE_BUDGET_MS = 120_000
 RETRY_DELAYS = (1.0, 2.0)  # 최초 + 2회 재시도
 RETRYABLE = ("429", "503", "timeout", "rate limit", "overloaded", "temporarily")
-SAFE_FALLBACK = "앗 어떤 부분이요?"  # 검증 실패 시 서윤 고정 대사(feedback_rules VAGUE_CRITICISM)로 대체
+SAFE_FALLBACK = "앗, 어느 부분인지 한 번만 더 알려주실 수 있을까요?"  # 검증 실패 시 서윤 고정 대사(feedback_rules VAGUE_CRITICISM)로 대체
 
 
 # ---- Instructions -----------------------------------------------------------
@@ -145,7 +145,7 @@ def check_tool_budget(tool_counts: dict[str, int], tool: str, step_count: int, a
 
 # ---- Guardrails -----------------------------------------------------------------------
 
-FORBIDDEN_OUTPUT = [r"최종\s*우선순위는", r"정답은", r"점수", r"합격", r"불합격", r"이것을\s*선택하세요"]
+FORBIDDEN_OUTPUT = [r"최종\s*우선순위는", r"정답은", r"점수", r"평가", r"시험", r"테스트", r"합격", r"불합격", r"이것을\s*선택하세요"]
 NUMBER = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 

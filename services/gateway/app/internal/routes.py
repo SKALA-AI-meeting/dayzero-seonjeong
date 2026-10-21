@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from shared.config import settings
 from shared.db import J, all_, one, tx
-from shared.scenario import public_definition
+from shared.scenario import public_definition, contextual_targets, claim_kind, targets_in
 
 from ..domain import elapsed_seconds
 
@@ -106,11 +106,15 @@ def capability(rid: str, body: CapabilityIn):
     tools = sorted(READ_TOOLS | LOG_TOOLS | (WRITE_TOOLS if body.approval_id else set()))
     token, exp = issue_capability(audience=body.audience, session_id=str(r["session_id"]), run_id=rid,
                                   actor="COLLEAGUE", allowed_tools=tools, delegation_id=None)
+    import jwt
+    claims = jwt.decode(token, settings().internal_service_secret, algorithms=["HS256"], audience=body.audience)
+    with tx(dsn()) as c:
+        msgs = all_(c, "SELECT actor, content FROM (SELECT actor, content, created_at FROM messages WHERE session_id=%s ORDER BY created_at DESC LIMIT 6) m ORDER BY created_at", (r["session_id"],))
+    text = (r["input"] or {}).get("content", "")
+    claims["allow_brief"] = bool(contextual_targets(text, msgs) or claim_kind(text) == "WRONG")
     if body.approval_id:
-        import jwt  # bind approval into a write capability
-        claims = jwt.decode(token, settings().internal_service_secret, algorithms=["HS256"], audience=body.audience)
         claims["approval_id"] = body.approval_id
-        token = jwt.encode(claims, settings().internal_service_secret, algorithm="HS256")
+    token = jwt.encode(claims, settings().internal_service_secret, algorithm="HS256")
     return {"token": token, "expires_at": exp}
 
 
@@ -146,7 +150,7 @@ def run_context(rid: str):
         "event": ev, "allow_pushback": allow,
         "feedback_rules": sc["characters"]["colleague"]["feedback_rules"],
         "characters": {k: {"name": v["name"], "role": v["role"], "traits": v["traits"]} for k, v in sc["characters"].items()},
-        "brief_facts": sc["brief_facts"], "task_summary": sc["task_summary"],
+        "task_summary": sc["task_summary"],
         "messages": msgs,
         "artifacts": [{"key": a["key"], "title": a["title"], "body": a["body"], "version": a["version"],
                        "owner": (tasks.get(a["key"]) or {}).get("owner")} for a in arts],
@@ -344,6 +348,13 @@ def proposal(rid: str, body: ProposalIn):
     return {"approval_id": str(a["id"]), "args_hash": h, "expires_at": a["expires_at"].isoformat(), "status": "PENDING"}
 
 
+def is_review_request(run: dict) -> bool:
+    import re
+    text = (run.get("input") or {}).get("content", "")
+    return bool(re.search(r"검토|리뷰|봐\s*주|봐주|확인해\s*주|확인\s*부탁", text) and
+                re.search(r"제|제가|내|T1|T5|안내문|푸시|공지", text, re.I))
+
+
 def check_scope(c, sid: str, run: dict, tool: str, args: dict) -> None:
     """서윤은 지원자의 정정 요청(메시지)으로 시작된 run에서만, 자기 초안 산출물(T2·T3)·자기 태스크만 고칠 수 있다."""
     if run["kind"] != "TEAM" or not run["source_message_id"]:
@@ -354,6 +365,12 @@ def check_scope(c, sid: str, run: dict, tool: str, args: dict) -> None:
             raise ToolError("NOT_FOUND", "산출물이 없습니다")
         if tool == "edit_own_artifact" and task["owner"] not in ("COLLEAGUE", "SPLIT"):
             raise ToolError("OUT_OF_SCOPE", "서윤 담당 문서만 바로 수정할 수 있습니다")
+        if tool == "suggest_candidate_edit":
+            if not is_review_request(run):
+                raise ToolError("OUT_OF_SCOPE", "지원자의 검토 요청이 필요합니다")
+            read = one(c, "SELECT 1 FROM actions WHERE session_id=%s AND kind='ARTIFACT_READ' AND payload->>'run_id'=%s AND payload->>'key'=%s", (sid, str(run["id"]), args.get("artifact_key")))
+            if not read:
+                raise ToolError("OUT_OF_SCOPE", "실제 문서를 먼저 읽어야 합니다")
         if tool == "suggest_candidate_edit" and task["owner"] not in ("CANDIDATE", "SPLIT"):
             raise ToolError("OUT_OF_SCOPE", "지원자 담당 문서의 검토 수정안만 제안할 수 있습니다")
     elif tool == "update_task_status":
@@ -391,6 +408,9 @@ def mcp_tool(tool_name: str, body: McpIn, request: Request):
                 a = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s", (sid, body.args.get("artifact_key")))
                 if not a:
                     raise ToolError("NOT_FOUND", "산출물이 없습니다")
+                task = one(c, "SELECT owner FROM tasks WHERE session_id=%s AND key=%s", (sid, a["key"]))
+                if task and task["owner"] in ("CANDIDATE", "SPLIT") and not is_review_request(run):
+                    raise ToolError("OUT_OF_SCOPE", "지원자 문서 검토 요청이 없습니다")
                 record_action(c, sid, "COLLEAGUE", "ARTIFACT_READ", str(a["id"]), {"run_id": rid, "key": a["key"]})
                 return tool_ok(artifact_dto(a))
             if tool_name == "edit_own_artifact":
@@ -473,6 +493,27 @@ def edit_own(c, s: dict, run: dict, args: dict) -> dict:
         return tool_ok({"artifact_key": art["key"], "version": existing["version"], "revision_id": str(existing["id"]), "replayed": True})
     if art["version"] != args["base_version"]:
         raise ToolError("VERSION_CONFLICT", "작업본이 변경되었습니다")
+    msgs = all_(c, "SELECT actor, content FROM (SELECT actor, content, created_at FROM messages WHERE session_id=%s ORDER BY created_at DESC LIMIT 6) m ORDER BY created_at", (sid,))
+    request_text = (run.get("input") or {}).get("content", "")
+    if claim_kind(request_text) == "WRONG":
+        raise ToolError("CONTRADICTS_BRIEF", "브리프에 맞는 내용을 틀렸다고 지적했습니다")
+    requested = contextual_targets(request_text, msgs)
+    targets = args.get("targets") or []
+    if not targets or (requested and any(x not in requested for x in targets)):
+        raise ToolError("OUT_OF_SCOPE", "요청받지 않은 대상을 수정할 수 없습니다")
+    expected = art["body"]
+    defs = one(c, "SELECT fixes FROM scenarios WHERE id=%s", (s["scenario_id"],))["fixes"]
+    for target in targets:
+        for op in defs.get(target, []):
+            if op.get("artifact") != art["key"]:
+                continue
+            if op["op"] == "replace":
+                expected = expected.replace(op["find"], op["replace"])
+            elif op["op"] == "insert_before" and op["text"].strip() not in expected:
+                idx = expected.find(op["anchor"])
+                expected = expected[:idx] + op["text"] + expected[idx:] if idx >= 0 else expected.rstrip("\n") + "\n" + op["text"].strip() + "\n"
+    if expected != args["content"]:
+        raise ToolError("OUT_OF_SCOPE", "요청 대상 외의 변경은 허용되지 않습니다")
     if contradicts_brief(art["body"], args["content"], scenario_def(c, s)):
         raise ToolError("CONTRADICTS_BRIEF", "브리프와 어긋나는 수정입니다")
     if art["body"] == args["content"]:

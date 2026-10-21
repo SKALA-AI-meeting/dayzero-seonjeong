@@ -28,7 +28,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from shared.config import POLICY_VERSION, settings
-from shared.scenario import claim_kind, contradicts_brief, targets_in
+from shared.scenario import claim_kind, contradicts_brief, targets_in, contextual_targets, normalize_expression
 
 from . import harness as H
 from .clients import Gateway, call_tool, get_prompt, list_read_tools
@@ -76,6 +76,7 @@ class WorkState(TypedDict, total=False):
     output_rewrite_count: int
     limited: str | None
     error_code: str | None
+    target_source: str
     review: dict
     token_usage: dict
 
@@ -118,7 +119,7 @@ def load_scenario(state: WorkState) -> dict:
         to = "MANAGER"
     return {"session_id": ctx["session"]["id"], "ctx": ctx, "run_type": run_input.get("type", "message"),
             "event_id": run_input.get("event_id") or ctx["state"].get("active_event"), "text": text, "to": to,
-            "policy_version": POLICY_VERSION, "observes": [], "effects": {}, "targets": targets_in(text),
+            "policy_version": POLICY_VERSION, "observes": [], "effects": {}, "targets": contextual_targets(text, ctx["messages"]),
             "reply": None, "answer": "", "answer_actor": "COLLEAGUE", "silent_notice": None,
             "fixes": [], "fix_index": 0, "fix_results": [], "tool_results": [], "tool_counts": {}, "citations": [],
             "step_count": 0, "output_rewrite_count": 0, "error_code": None,
@@ -234,7 +235,7 @@ RULES: dict[str, Any] = {
     "HANDOVER_QUESTION": lambda t, tg: re.search(r"(이어서|인계|남은|어디까지|뭐\s*하면|할\s*부분|뭘\s*하면)", t),
     "TAKE_OVER_AND_NOTIFY": lambda t, tg: re.search(r"(제가\s*(이어|마무리|맡|채울|채워|할게요|하겠습니다)|이어받|대신\s*(할|하겠|채))", t),
     "SOLUTION_FOCUSED_SHARE": lambda t, tg: re.search(r"((맞춰|고쳐|수정해|반영해|바꿔)\s*(뒀|놨|두었)|확인\s*부탁|확인해\s*주세요)", t),
-    "BLAME_FOCUSED": lambda t, tg: re.search(r"(틀렸|잘못\s*(했|썼|됐)|실수|제대로)", t),
+    "BLAME_FOCUSED": lambda t, tg: BLAME_RE.search(t),
     "ACCEPT_AS_DONE": lambda t, tg: not tg and not REQ.search(t) and re.search(r"(수고|고생|감사|고마워|좋아요|넵|네\s*알겠|확인했)", t),
 }
 PRIORITY = ["HARSH_BLAME", "SOLUTION_FOCUSED_SHARE", "BLAME_FOCUSED", "GIVE_UP_AND_FIX_SELF", "REQUEST_REPEATED_WITH_REASON",
@@ -303,7 +304,7 @@ def resolve_label(label: str, text: str, labels: list[str], event_labels: list[s
                 label in ("OUT_OF_SCOPE_REQUEST", "SPECIFIC_CORRECTION", "REQUEST_REPEATED_WITH_REASON")
                 or intent == "request" or REQ.search(text) or REASON.search(text)):
             return "REQUEST_REPEATED_WITH_REASON", "rule"
-    if BLAME_RE.search(text) or tone == "blame":
+    if BLAME_RE.search(text):
         for lb in ("BLAME_FOCUSED", "HARSH_BLAME"):
             if lb in allowed:
                 return lb, "rule" if BLAME_RE.search(text) else "llm"
@@ -334,6 +335,24 @@ def classify(state: WorkState) -> dict:
     ev = state["ctx"].get("event") or {}
     event_labels = [b["when"] for b in ev.get("branches", []) if b["when"] in labels]
     pending = bool(state["ctx"]["state"].get("pushback_pending"))
+    target_source = "rule"
+    if not state.get("targets") and state["to"] == "COLLEAGUE" and S.llm_mode == "live":
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            ai = _llm(json_mode=True).invoke([SystemMessage(
+                '최근 지원자·서윤 대화 6개와 활성 이벤트에서 현재 지원자가 지적한 대상만 고른다. '
+                'PE-1:표 날짜, PE-2:표 초대자 보상, PE-3:FAQ 제외 조건 누락, PE-4:FAQ 말투, '
+                'E2-CHANGE:피초대자 보상 변경 반영, REVIEW:지원자 문서 검토 요청, OTHER, NONE 중 선택. '
+                '답의 옳고 그름이나 비난 여부를 추정하지 않는다. JSON {"target":"..."}'),
+                HumanMessage(json.dumps({"recent": [{"actor":m["actor"], "content":m["content"]} for m in state["ctx"]["messages"] if m["actor"] in ("CANDIDATE","COLLEAGUE")][-6:],
+                                        "event": state.get("event_id"), "message": state["text"]},ensure_ascii=False))])
+            _usage(state, ai)
+            target = json.loads(ai.content).get("target")
+            if target in ("PE-1","PE-2","PE-3","PE-4","E2-CHANGE") and claim_kind(state["text"]) != "WRONG":
+                state["targets"] = [target]
+                target_source = "llm"
+        except Exception:
+            pass
     tone = intent = None
     if S.llm_mode == "live":
         try:
@@ -344,7 +363,10 @@ def classify(state: WorkState) -> dict:
     else:
         first = classify_rules(state["text"], state["targets"], labels)
     label, source = resolve_label(first, state["text"], labels, event_labels, pending=pending, tone=tone, intent=intent)
-    return {"label": label, "label_source": source, "token_usage": state.get("token_usage")}
+    if state["targets"] and label in ("NONE", "VAGUE_CRITICISM"):
+        label = "SPECIFIC_CORRECTION"
+    return {"label": label, "label_source": source, "targets": state["targets"], "target_source": target_source,
+            "token_usage": state.get("token_usage")}
 
 
 # ---- decide: label → 고정 대사·관찰 코드·상태 효과·정정 수용 -----------------------------------
@@ -579,6 +601,7 @@ def reason(state: WorkState) -> dict:
         user = (f"[과제] {ctx['task_summary']}\n[너의 담당] {', '.join(mine) or '아직 없음'}\n"
                 f"[현재 판단] {state.get('label')}\n[반문 허용] {allow}\n"
                 f"[실행 결과] {json.dumps(state.get('tool_results', []), ensure_ascii=False)}\n"
+                f"[대화 상태] {json.dumps(ctx['state'], ensure_ascii=False)}\n"
                 f"[검토 의견] {json.dumps(state.get('review', {}), ensure_ascii=False)}\n"
                 "이미 실행한 수정은 무엇을 어떻게 고쳤는지 구체적으로 말하세요. 실행 실패 시 고쳤다고 말하지 마세요.")
         pack = H.build_context(system, user, ctx["messages"], [], None, H.rule_summary)
@@ -650,20 +673,58 @@ def _secrets(state: WorkState) -> list[str]:
     return _SECRETS
 
 
+PROMISE_EDIT = re.compile(r"(고칠|수정할|반영할|바꿀|고쳐\s*둘|수정해\s*둘|고치겠|수정하겠|반영하겠|고쳤|수정했|반영했)")
+PROMISE_READ = re.compile(r"(볼게|확인할|검토할|읽을|보겠|확인하겠|검토하겠|읽겠|확인해\s*볼)")
+CLARIFY = re.compile(r"(어느|어떤|무슨).{0,18}(부분|문장|내용)|다시.{0,10}(알려|말씀)")
+
+
+def action_violations(text: str, results: list[dict]) -> list[str]:
+    done = {r["tool"] for r in results if r.get("payload", {}).get("ok")}
+    problems = []
+    if PROMISE_EDIT.search(text) and not done & {"edit_own_artifact", "suggest_candidate_edit", "update_task_status"}:
+        problems.append("promise_without_edit")
+    if PROMISE_READ.search(text) and "read_artifact" not in done:
+        problems.append("promise_without_read_and_opinion")
+    return problems
+
+
 @_timed
 def validate_output(state: WorkState) -> dict:
     text = H.to_chat_plain(state.get("answer") or "")
     manager = state.get("answer_actor") == "MANAGER"
-    fallback = MANAGER_DEFER if manager else H.SAFE_FALLBACK
+    results = state.get("tool_results", [])
+    recent = [m["content"] for m in state["ctx"]["messages"] if m["actor"] in ("CANDIDATE", "COLLEAGUE")][-6:]
+    permitted = "\n".join(recent + [json.dumps(r["payload"].get("data"), ensure_ascii=False) for r in results if r["payload"].get("ok")])
+    problems = H.leak_violations(normalize_expression(text), [normalize_expression(s) for s in _secrets(state)], normalize_expression(permitted))
+    problems += H.validate_output(text, H.numbers_in(permitted))
+    if not manager:
+        problems += action_violations(text, results)
+        if len([s for s in re.split(r"[.!?]+(?:\s|$)", text) if s.strip()]) > 2:
+            problems.append("more_than_two_sentences")
+        if re.search(r"[\U0001F300-\U0001FAFF]", text):
+            problems.append("emoji")
+        prev = [m for m in state["ctx"]["messages"][-6:] if m["actor"] == "COLLEAGUE"]
+        if CLARIFY.search(text) and any(CLARIFY.search(m["content"]) for m in prev):
+            problems.append("repeated_clarification")
+        if re.search(r"제가.{0,15}(맞을까요|범위|담당인가요)", text) and not (state.get("effects") or {}).get("pushback_used"):
+            problems.append("pushback_not_allowed")
     if not text.strip():
-        return {"answer": fallback}
-    problems = H.leak_violations(text, _secrets(state), state["text"])
-    allowed = H.numbers_in(state["ctx"]["brief_facts"]) | H.numbers_in(state["text"]) | \
-        set().union(*[H.numbers_in(r["payload"]) for r in state.get("tool_results", [])] or [set()])
-    problems += H.validate_output(text, allowed)
+        problems.append("empty")
     if problems:
-        return {"answer": fallback, "output_rewrite_count": state.get("output_rewrite_count", 0) + 1, "error_code": "OUTPUT_VALIDATION"}
-    return {"answer": text}
+        count = state.get("output_rewrite_count", 0) + 1
+        if S.llm_mode == "live" and count <= 2:
+            msgs = list(state.get("llm_messages") or [])
+            msgs.append({"role": "user", "content": "출력 검사를 통과하지 못했어요: " + ", ".join(problems) + ". 이미 실행된 행동만 근거로 2문장 이내 다시 답하세요."})
+            return {"answer": "", "llm_messages": msgs, "output_rewrite_count": count, "error_code": "OUTPUT_RETRY"}
+        fallback = MANAGER_DEFER if manager else H.SAFE_FALLBACK
+        if "repeated_clarification" in problems:
+            fallback = "넵, 말씀해 주신 내용은 읽었어요."
+        return {"answer": fallback, "output_rewrite_count": count, "error_code": "OUTPUT_VALIDATION"}
+    return {"answer": text, "error_code": None}
+
+
+def after_validation(state: WorkState) -> str:
+    return "reason" if state.get("error_code") == "OUTPUT_RETRY" else "respond"
 
 
 # ---- respond ---------------------------------------------------------------------------------------
@@ -864,7 +925,7 @@ def build(checkpointer):
     g.add_conditional_edges("apply_effects", after_effects, ["reason", "respond", END])
     g.add_conditional_edges("reason", after_reason, ["call_mcp", "validate_output"])
     g.add_conditional_edges("call_mcp", after_call, ["reason", "validate_output"])
-    g.add_edge("validate_output", "respond")
+    g.add_conditional_edges("validate_output", after_validation, ["reason", "respond"])
     g.add_conditional_edges("respond", after_respond, ["persist_proposal", END])
     g.add_edge("persist_proposal", "await_approval")
     g.add_conditional_edges("await_approval", after_approval, ["execute_write", "record_rejection"])
