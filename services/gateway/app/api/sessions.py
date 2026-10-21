@@ -176,9 +176,11 @@ def patch_artifact(sid: str, key: str, body: ArtifactPatchIn, p: Principal = Dep
         turn = engine.add_turn(c, s)
         before = a["body"]
         a = one(c, "UPDATE artifacts SET body=%s, version=version+1 WHERE id=%s RETURNING *", (body.body, a["id"]))
-        rev = one(c, """INSERT INTO artifact_revisions(session_id,artifact_id,version,body_before,body_after,actor,turn)
-                        VALUES (%s,%s,%s,%s,%s,'CANDIDATE',%s) RETURNING id""",
-                  (sid, a["id"], a["version"], before, body.body, turn))
+        rev = one(c, """INSERT INTO artifact_revisions(session_id,artifact_id,version,body_before,body_after,actor,turn,meta)
+                        VALUES (%s,%s,%s,%s,%s,'CANDIDATE',%s,%s) RETURNING id""",
+                  (sid, a["id"], a["version"], before, body.body, turn, J({"elapsed_seconds":elapsed_seconds(s),"event_id":engine.state(s).get("active_event")})))
+        from ..observer import observe_revision
+        observe_revision(c, s, rev, key, before, body.body)
         record_action(c, sid, "CANDIDATE", "ARTIFACT_SAVED", str(rev["id"]), {"key": key, "version": a["version"]})
         emit(c, sid, "ARTIFACT_UPDATED", {"artifact": artifact_dto(a), "actor": "CANDIDATE"})
         engine.tick(c, s)

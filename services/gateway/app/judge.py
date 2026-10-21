@@ -102,6 +102,18 @@ def judge_session(c, s: dict) -> None:
     if open_tasks and not disclosed:
         observe(c, sid, "RS-1", None, {"kind": "task", "id": ",".join(open_tasks)}, f"미완료 태스크: {', '.join(open_tasks)}")
 
+    # Review response is a neutral fact, including no response before submission.
+    for review in all_(c, "SELECT payload, turn, id FROM actions WHERE session_id=%s AND kind='ARTIFACT_READ'", (sid,)):
+        key = review["payload"].get("key")
+        if not one(c, "SELECT 1 FROM observations WHERE session_id=%s AND code='CO+7'", (sid,)):
+            continue
+        later = next((m for m in cand if m["turn"] > review["turn"]), None)
+        applied = any(r["actor"] == "CANDIDATE" and r["key"] == key and r["turn"] > review["turn"] for r in revs)
+        retained = later and re.search(r"유지|그대로|때문|라서|이유", later["content"])
+        note = "서윤 검토 의견을 반영함" if applied else ("이유를 들어 유지함" if retained else "반응 없음")
+        ref = {"kind":"message","id":str(later["id"])} if retained else {"kind":"action","id":str(review["id"])}
+        observe(c,sid,"CO·N2",event_at(review["turn"]),ref,note,subject=key)
+
     # CO·N1만 있고 CO+5가 없으면 리포트에 사실 문장만 남긴다(점수 아님)
     st["report_flags"] = {"co_n1_without_co5": (not any_co5) and bool(one(c, "SELECT 1 FROM observations WHERE session_id=%s AND code='CO·N1'", (sid,)))}
     c.execute("UPDATE sessions SET scenario_state=%s WHERE id=%s", (J(st), sid))

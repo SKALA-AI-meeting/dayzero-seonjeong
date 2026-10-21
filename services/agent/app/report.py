@@ -30,6 +30,10 @@ def _evidence_text(o: dict) -> str:
 
 def criteria_query(o: dict) -> str:
     """질의 = 코드 정의(첫 문장, '판정 없이 기록만' 같은 메모 제외) + 근거 원문 요약."""
+    if o.get("code") == "CO+7":
+        return "협업 조율 동료에게 자기 산출물 검토 요청 피드백 공유"
+    if o.get("code") == "CO·N2":
+        return "협업 조율 동료 피드백 검토 의견 반영 또는 근거를 들어 유지"
     ev = _evidence_text(o)
     return f"{o['definition'].split('. ')[0]} — {ev}" if ev else o["definition"].split(". ")[0]
 

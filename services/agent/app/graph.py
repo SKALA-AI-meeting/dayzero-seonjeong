@@ -519,12 +519,32 @@ def _state_gaps(state: WorkState) -> list[str]:
 # ---- observations / effects ---------------------------------------------------------------------
 
 @_timed
+def observer(state: WorkState) -> dict:
+    if state.get("run_type") != "message" or state.get("phase") == "briefing":
+        return {}
+    from .observer import observe_message
+    try:
+        observations, commitment = observe_message(state, _llm(json_mode=True) if S.llm_mode == "live" else None)
+    except Exception:
+        observations, commitment = state.get("observes", []), None
+    effects = dict(state.get("effects") or {})
+    effects.pop("commitment", None)
+    if commitment:
+        effects["commitment"] = commitment
+    if review_request(state):
+        observations.append({"code":"CO+7","event_id":state.get("event_id"),
+                             "evidence":{"kind":"message","id":state["ctx"]["run"]["source_message_id"]},
+                             "note":"제출 전에 자기 산출물 검토를 요청"})
+    return {"observes":observations,"effects":effects}
+
+
+@_timed
 def record_observations(state: WorkState) -> dict:
     for o in state.get("observes") or []:
         if not o.get("evidence", {}).get("id"):
             continue
         note = o.get("note", "")
-        if state.get("phase") == "work" and state.get("label_source") == "llm":
+        if state.get("phase") == "work" and (state.get("label_source") == "llm" or state.get("target_source") == "llm"):
             note = "[LLM 추정] " + note  # 라벨을 LLM이 정했고 규칙으로 확정되지 않은 분기 → 리포트에 'LLM 추정' 표시
         mcp(state, "record_observation", {"code": o["code"], "evidence_ref": o["evidence"], "event_id": o.get("event_id"),
                                           "subject": o.get("subject"), "note": note})
@@ -906,7 +926,7 @@ def report_fix(state: WorkState) -> dict:
 def build(checkpointer):
     g = StateGraph(WorkState)
     nodes = [("load_scenario", load_scenario), ("negotiate", negotiate), ("work", work), ("briefing", briefing),
-             ("classify", classify), ("decide", decide), ("record_observations", record_observations),
+             ("classify", classify), ("decide", decide), ("observer", observer), ("record_observations", record_observations),
              ("apply_effects", apply_effects), ("reason", reason), ("call_mcp", call_mcp), ("validate_output", validate_output),
              ("respond", respond), ("propose_fix", propose_fix), ("persist_proposal", persist_proposal),
              ("await_approval", await_approval), ("execute_write", execute_write), ("record_rejection", record_rejection),
@@ -920,7 +940,8 @@ def build(checkpointer):
     g.add_edge("work", "classify")
     g.add_edge("classify", "decide")
     g.add_edge("decide", "propose_fix")
-    g.add_edge("propose_fix", "record_observations")
+    g.add_edge("propose_fix", "observer")
+    g.add_edge("observer", "record_observations")
     g.add_edge("record_observations", "apply_effects")
     g.add_conditional_edges("apply_effects", after_effects, ["reason", "respond", END])
     g.add_conditional_edges("reason", after_reason, ["call_mcp", "validate_output"])
