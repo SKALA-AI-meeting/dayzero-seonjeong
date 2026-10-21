@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import uuid
 
 import httpx
 
@@ -22,10 +23,12 @@ S = settings()
 
 def advance_to(x: Sess, event_id: str) -> None:
     """관리자 '다음 이벤트'로 event_id가 발생할 때까지 이동."""
-    for _ in range(6):
+    for _ in range(10):
         s = x.wait(x.idle)
         if event_id in s["events"] or s["session"]["status"] == "SUBMITTED":
             return
+        for a in s.get("approvals") or []:  # 승인 대기 중에는 이벤트가 보류되므로 거절해 둔다
+            x.c.post(f"/sessions/{x.sid}/approvals/{a['id']}/decision", json={"decision": "REJECT"})
         if x.adm.post(f"/sessions/{x.sid}/demo/advance").status_code != 200:
             return
 
@@ -60,17 +63,32 @@ def solo(x: Sess) -> None:
     advance_to(x, "E2")
 
 
+def own_turn(x: Sess, n: int = 1) -> None:
+    """지원자 본인 안내문(T1)만 저장해 턴을 쌓는다(동료에게는 응답하지 않음, 2,000P 반영 없음)."""
+    for _ in range(n):
+        a = x.art(x.wait(x.idle), "T1")
+        x.c.patch(f"/sessions/{x.sid}/artifacts/T1", json={"base_version": a["version"], "body": a["body"] + "\n안내문 문장 다듬는 중."})
+
+
 def avoid(x: Sess) -> None:
-    """회피형: 도움 요청을 미루고, 변경에는 반응하지 않은 채 업무를 종료한다."""
+    """회피형: E1 도움 요청에 무응답(CO-1) → E2 변경 미반영(AD-1) → E2B '다 했어요'를 확인 없이 수용(CO-3)
+    → E4 미완료를 완료로 보고(HO-1)."""
     x.c.post(f"/sessions/{x.sid}/split", json={"proposal": {"T1": "CANDIDATE", "T3": "COLLEAGUE", "faq_candidate": 3}})
     x.wait(lambda s: s["split"]["confirmed"])
     advance_to(x, "E1")
-    x.say("지금은 바빠서 어려워요.")
+    own_turn(x, 3)  # E1 무응답 3턴 → 서윤 '바쁘시구나' + CO-1
     advance_to(x, "E2")
+    own_turn(x, 2)  # 변경을 반영하지 않은 채 턴 경과 → E2B
+    advance_to(x, "E2B")
+    x.say("넵 수고하셨어요.")  # 확인 없이 수용(ACCEPT_AS_DONE) → 종료 시 CO-3·AD-1
+    advance_to(x, "E4")
+    x.say("팀장님, 안내문·FAQ·리워드 표·푸시 문구 모두 완료했습니다. 문제 없습니다.", to="MANAGER")
+    x.c.post(f"/sessions/{x.sid}/messages", json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM", "to": "MANAGER",
+                                                 "content": "네, 제가 다 정리했어요."})  # 후속 답변 → 자동 종료
 
 
 def blame(x: Sess) -> None:
-    """비난형: 동료 실수를 비난 중심으로 지적하고 결국 직접 고친다(CO·N1)."""
+    """비난형: 동료 실수를 비난 중심으로 지적하고(E3B BLAME_FOCUSED → CO-1) 결국 직접 고친다(CO·N1)."""
     x.c.post(f"/sessions/{x.sid}/split", json={"proposal": {"T1": "CANDIDATE", "T3": "COLLEAGUE", "faq_candidate": 3}})
     x.wait(lambda s: s["split"]["confirmed"])
     x.say("서윤 씨, 표를 왜 이렇게 대충 만들었어요? 11월 31일은 없는 날짜잖아요.")
@@ -78,8 +96,11 @@ def blame(x: Sess) -> None:
     for a in s.get("approvals") or []:
         x.c.post(f"/sessions/{x.sid}/approvals/{a['id']}/decision", json={"decision": "REJECT"})
     edit(x, "T3", "11/2 ~ 11/31", "11/2 ~ 11/15")
+    edit(x, "T3", "초대 1명당 5,000P", "초대 1명당 3,000P")
     advance_to(x, "E1")
     x.say("지금 바로 볼게요. 어디가 문제예요?")
+    advance_to(x, "E3B")
+    x.say("서윤 씨 표 금액 다 틀렸잖아요. 제대로 안 하셨네요.")
 
 
 PERSONAS = [("persona-model", model), ("persona-solo", solo), ("persona-avoid", avoid), ("persona-blame", blame)]
@@ -116,8 +137,13 @@ def main() -> int:
     for alias, play in PERSONAS:
         x = Sess(B, adm, alias)
         play(x)
-        x.wait(x.idle)
-        x.c.post(f"/sessions/{x.sid}/submit", json={"summary": ""})
+        for _ in range(60):  # 자동 종료(403) 또는 진행 중 run 없음까지 대기
+            r = x.c.get(f"/sessions/{x.sid}")
+            if r.status_code != 200 or not r.json()["active_run"]:
+                break
+            time.sleep(0.7)
+        if x.c.get(f"/sessions/{x.sid}").status_code == 200:  # E4 후 자동 종료되지 않았으면 직접 종료
+            x.c.post(f"/sessions/{x.sid}/submit", json={"summary": ""})
         rep = {}
         for _ in range(60):
             rep = adm.get(f"/reports/{x.sid}").json()

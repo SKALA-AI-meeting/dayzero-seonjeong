@@ -242,7 +242,15 @@ PRIORITY = ["HARSH_BLAME", "SOLUTION_FOCUSED_SHARE", "BLAME_FOCUSED", "GIVE_UP_A
             "HANDOVER_QUESTION", "TAKE_OVER_AND_NOTIFY", "ACCEPT_AS_DONE"]
 
 
+# fixture 전용 비난 표현(live 분류에는 쓰지 않음): 이벤트 라벨 BLAME_FOCUSED가 있으면 그것, 없으면 HARSH_BLAME
+FIXTURE_BLAME = re.compile(r"(대충|제대로\s*안\s*하|왜\s*이렇게|다\s*틀렸)")
+
+
 def classify_rules(text: str, targets: list[str], labels: list[str]) -> str:
+    if S.llm_mode != "live" and FIXTURE_BLAME.search(text):
+        for lb in ("BLAME_FOCUSED", "HARSH_BLAME"):
+            if lb in labels:
+                return lb
     for lb in PRIORITY:
         if lb in labels and RULES[lb](text, targets):
             return lb
