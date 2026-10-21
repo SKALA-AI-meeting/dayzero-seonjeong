@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+import logging
 import httpx
 from fastapi import FastAPI
 
@@ -12,7 +15,31 @@ from .api import auth_routes, sessions
 s = settings()
 s.require_secrets("database_url", "jwt_secret", "internal_service_secret")
 
-app = FastAPI(title="Day Zero gateway", version="0.1.0")
+async def clock_loop():
+    from . import engine
+    while True:
+        try:
+            def advance():
+                with tx(s.psycopg_dsn) as c:
+                    rows = c.execute("SELECT * FROM sessions WHERE status='ACTIVE' FOR UPDATE SKIP LOCKED").fetchall()
+                    for session in rows:
+                        engine.tick(c, session, on_action=False)
+            await asyncio.to_thread(advance)
+        except Exception:
+            logging.getLogger(__name__).exception("Exam clock tick failed")
+        await asyncio.sleep(0.5)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(clock_loop())
+    yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+
+app = FastAPI(lifespan=lifespan, title="Day Zero gateway", version="0.1.0")
 errors.install(app)
 API = "/api/v1"
 app.include_router(auth_routes.router, prefix=API)

@@ -13,6 +13,8 @@ from shared.config import settings
 from shared.db import J, all_, one, tx
 from shared.scenario import public_definition
 
+from ..domain import elapsed_seconds
+
 from .. import engine
 from ..auth import internal_service, issue_capability, verify_capability
 from ..business import ToolError, get_next_event, get_planted_error, get_scenario, record_observation, session_context
@@ -138,7 +140,7 @@ def run_context(rid: str):
         "candidate_alias": part["alias"] if part else "지원자",
         "run": {"id": rid, "kind": r["kind"], "status": r["status"], "input": r["input"], "trace_id": r["trace_id"],
                 "source_message_id": r["source_message_id"], "thread_id": r["thread_id"]},
-        "session": {"id": sid, "status": s["status"], "turn_count": s["turn_count"], "virtual_time": s["virtual_time"]},
+        "session": {"id": sid, "status": s["status"], "turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s)},
         "state": {k: st.get(k) for k in ("active_event", "awaiting", "colleague", "pushback", "pushback_pending",
                                           "e2_asked_colleague", "e4", "manager_answered", "split")},
         "event": ev, "allow_pushback": allow,
@@ -295,9 +297,6 @@ def branch(rid: str, body: BranchIn):
                 st["split"] = {**st["split"], "proposal": body.split.proposal, "last_label": body.split.label}
                 set_state(c, s, st)
                 emit(c, sid, "SPLIT_UPDATED", {"split": engine.public_split(st)})
-        if body.end_session:
-            post_line(c, sid, "SYSTEM", f"{s['virtual_time']} 브리핑이 끝나 오늘 업무를 종료합니다.", meta={"kind": "SESSION_END"})
-            engine.end_session(c, s, actor="SYSTEM", summary="E4 브리핑 후 종료")
     return {"applied": True}
 
 

@@ -53,7 +53,7 @@ async def forward(tool: str, args: dict, ctx: Context, *, retries: int) -> t.Cal
 
 
 @mcp.tool(annotations=READ, description=(
-    "현재 세션의 턴 수, 가상 시각, 활성 이벤트, 서윤 상태(자리 비움), 태스크 보드(담당·상태·예상 시각), "
+    "현재 세션의 턴 수, 경과 시간, 활성 이벤트, 서윤 상태(자리 비움), 태스크 보드(담당·상태·예상 시각), "
     "산출물 목록(T1~T5 key·버전)을 조회한다. 인자 없음. 관찰 코드·심어둔 오류는 포함하지 않는다."))
 async def get_session_context(ctx: Context) -> t.CallToolResult:
     return await forward("get_session_context", {}, ctx, retries=2)

@@ -11,6 +11,13 @@ from .auth import Principal
 from .errors import ApiError
 
 
+def elapsed_seconds(s: dict, at: datetime | None = None) -> int:
+    if not s.get("started_at"):
+        return 0
+    end = at or s.get("submitted_at") or now()
+    return max(0, int((end - s["started_at"]).total_seconds()) + s.get("clock_offset_seconds", 0))
+
+
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -107,7 +114,7 @@ def insert_message(c, sid: str, actor: str, content: str, *, citations: list | N
                    meta: dict | None = None) -> dict:
     return one(c, """INSERT INTO messages(session_id,channel,actor,content,citations,source_run_id,client_message_id,meta,turn)
                      VALUES (%s,'TEAM',%s,%s,%s,%s,%s,%s,(SELECT turn_count FROM sessions WHERE id=%s)) RETURNING *""",
-               (sid, actor, content, J(citations or []), source_run_id, client_message_id, J(meta or {}), sid))
+               (sid, actor, content, J(citations or []), source_run_id, client_message_id, J({**(meta or {}), "elapsed_seconds": elapsed_seconds(one(c, "SELECT * FROM sessions WHERE id=%s", (sid,)))}), sid))
 
 
 def post_line(c, sid: str, actor: str, content: str, *, meta: dict | None = None, run_id: str | None = None,
@@ -138,7 +145,7 @@ def artifact_dto(a: dict) -> dict:
 
 def session_dto(s: dict) -> dict:
     return {"id": str(s["id"]), "status": s["status"], "phase": s["phase"], "version": s["version"],
-            "turn_count": s["turn_count"], "virtual_time": s["virtual_time"],
+            "turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s),
             "consent_at": s["consent_at"].isoformat() if s["consent_at"] else None,
             "started_at": s["started_at"].isoformat() if s["started_at"] else None,
             "submitted_at": s["submitted_at"].isoformat() if s["submitted_at"] else None,

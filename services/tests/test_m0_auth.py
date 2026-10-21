@@ -72,7 +72,7 @@ def test_invite_single_use_and_start_idempotent():
     assert [m["actor"] for m in snap["messages"]] == ["MANAGER", "COLLEAGUE"]  # E0 1회(팀장 지시 + 서윤 분업 질문)
     assert [t["key"] for t in snap["tasks"]] == ["T1", "T2", "T3"]  # T4는 E4, T5는 E2에서 추가
     assert {a["key"]: a["version"] for a in snap["artifacts"]} == {"T1": 1, "T2": 1, "T3": 1}
-    assert snap["session"]["turn_count"] == 0 and snap["clock"]["virtual_time"] == "09:00"
+    assert snap["session"]["turn_count"] == 0 and snap["clock"]["elapsed_seconds"] == "09:00"
 
 
 def test_csrf_and_origin_required():

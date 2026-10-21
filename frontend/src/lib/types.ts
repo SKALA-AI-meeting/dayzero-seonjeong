@@ -3,7 +3,7 @@ export type Owner = "UNASSIGNED" | "CANDIDATE" | "COLLEAGUE" | "SPLIT";
 export type SplitProposal = { T1: "CANDIDATE" | "COLLEAGUE"; T3: "CANDIDATE" | "COLLEAGUE"; faq_candidate: number };
 export type Message = {
   id: string; channel: "TEAM"; actor: string; content: string; citations: Citation[]; turn: number;
-  meta: { kind?: string; event_id?: string; label?: string; to?: string; split_proposal?: SplitProposal; virtual_time?: string };
+  meta: { kind?: string; event_id?: string; label?: string; to?: string; split_proposal?: SplitProposal; elapsed_seconds?: number };
   source_run_id: string | null; created_at: string;
 };
 export type Task = { id: string; key: string; title: string; status: string; owner: Owner; eta: string | null; note: string | null; version: number };
@@ -13,13 +13,13 @@ export type Approval = {
   before_after: { artifact_key?: string; title?: string; before?: string; after?: string; targets?: string[]; task_key?: string };
 };
 export type Run = { id: string; kind: string; status: string; error_code: string | null; result: unknown };
-export type Session = { id: string; status: string; phase: string; version: number; turn_count: number; virtual_time: string; last_stream_seq: number };
+export type Session = { id: string; status: string; phase: string; version: number; turn_count: number; elapsed_seconds: number; last_stream_seq: number };
 export type Snapshot = {
   session: Session; artifacts: Artifact[]; tasks: Task[]; messages: Message[]; active_run: Run | null;
   approvals: Approval[]; mode: string; events: string[];
-  brief: { title: string; company: string; task_summary: string; virtual_time: { start: string; deadline: string };
+  brief: { title: string; company: string; task_summary: string; 
     characters: Record<string, { name: string; role: string }> };
-  clock: { virtual_time: string; start: string; deadline: string; turn_count: number };
+  clock: { elapsed_seconds: number; remaining_seconds: number; server_now: string };
   colleague: { offline: boolean };
   split: { proposal: SplitProposal; rounds: number; confirmed: boolean; max_rounds: number } | null;
 };
@@ -70,3 +70,5 @@ export const ERROR_COPY: Record<string, string> = {
 export function fmtTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Seoul" });
 }
+
+export function fmtElapsed(seconds: number) { const s = Math.max(0, Math.floor(seconds)); return `${String(Math.floor(s/60)).padStart(2,"0")}:${String(s%60).padStart(2,"0")}`; }

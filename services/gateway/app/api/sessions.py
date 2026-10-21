@@ -15,6 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from shared.config import settings
 from shared.db import J, all_, one, tx
 
+from ..domain import elapsed_seconds
+
 from .. import engine
 from ..auth import Principal, candidate, principal
 from ..domain import (active_run, approval_dto, artifact_dto, create_run, emit, insert_message, list_artifacts, list_tasks,
@@ -64,16 +66,16 @@ def snapshot(c, sid: str, s: dict) -> dict:
     approvals = all_(c, "SELECT * FROM approvals WHERE session_id=%s AND status='PENDING' ORDER BY created_at", (sid,))
     sc = scenario_def(c, s)
     st = s["scenario_state"] or {}
-    occ = all_(c, "SELECT event_id, virtual_time, skipped FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
+    occ = all_(c, "SELECT event_id, elapsed_seconds, skipped FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
     return {"session": session_dto(s), "artifacts": list_artifacts(c, sid),
             "tasks": list_tasks(c, sid), "messages": [message_dto(m) for m in msgs],
             "active_run": run_dto(active_run(c, sid)),
             "approvals": [approval_dto(a) for a in approvals],
             "brief": {"title": sc["title"], "company": sc["company"], "task_summary": sc["task_summary"],
-                      "virtual_time": sc["virtual_time"], "characters": {k: {"name": v["name"], "role": v["role"]}
+                      "characters": {k: {"name": v["name"], "role": v["role"]}
                                                                         for k, v in sc["characters"].items()}},
-            "clock": {"virtual_time": s["virtual_time"], "start": sc["virtual_time"]["start"], "deadline": sc["virtual_time"]["deadline"],
-                      "turn_count": s["turn_count"]},
+            "clock": {"elapsed_seconds": elapsed_seconds(s), "remaining_seconds": max(0, 3600-elapsed_seconds(s)),
+                      "server_now": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()},
             "colleague": {"offline": bool((st.get("colleague") or {}).get("offline"))},
             "events": [o["event_id"] for o in occ if not o["skipped"]],
             "split": engine.public_split(st), "mode": settings().llm_mode}

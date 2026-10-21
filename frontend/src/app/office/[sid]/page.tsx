@@ -9,7 +9,7 @@ import { Drawer, Modal } from "@/components/Overlay";
 import { TaskBoard } from "@/components/TaskBoard";
 import { api, ApiError, loadMe, uuid } from "@/lib/api";
 import { subscribe, type StreamEvent } from "@/lib/events";
-import { COPY, DOC_TITLE, ERROR_COPY, type Artifact, type Citation, type Snapshot, type SplitProposal, type Task } from "@/lib/types";
+import { COPY, DOC_TITLE, fmtElapsed, ERROR_COPY, type Artifact, type Citation, type Snapshot, type SplitProposal, type Task } from "@/lib/types";
 
 type Doc = { id: string; title: string; version: number; body?: string; live?: boolean };
 
@@ -17,10 +17,12 @@ function errText(e: unknown, fallback: string) {
   return e instanceof ApiError ? (ERROR_COPY[e.code] ?? e.message) : fallback;
 }
 
-/** 지원자 작업 공간: 좌측 공유 문서 4개 + 태스크 보드, 중앙 팀 메신저(서윤·팀장), 우측 내 산출물. 상단은 가상 시각. */
+/** 지원자 작업 공간: 좌측 공유 문서 4개 + 태스크 보드, 중앙 팀 메신저(서윤·팀장), 우측 내 산출물. 상단은 경과 시간. */
 export default function Office() {
   const { sid } = useParams<{ sid: string }>();
   const router = useRouter();
+  const [clockNow, setClockNow] = useState(Date.now());
+  const [syncedAt, setSyncedAt] = useState(Date.now());
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [docView, setDocView] = useState<{ doc: Doc; quote: string | null } | null>(null);
@@ -44,6 +46,7 @@ export default function Office() {
     try {
       const s = await api<Snapshot>(`/sessions/${sid}`);
       setSnap(s);
+      setSyncedAt(Date.now());
       if (s.session.status === "CREATED") router.replace("/join");
       return s;
     } catch (e) {
@@ -57,6 +60,15 @@ export default function Office() {
     if (refreshTimer.current) clearTimeout(refreshTimer.current);
     if (closed.current) return;
     refreshTimer.current = setTimeout(refresh, 150);
+  }, [refresh]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    const timer = setInterval(() => { void refresh(); }, 5000);
+    return () => clearInterval(timer);
   }, [refresh]);
 
   useEffect(() => {
@@ -126,6 +138,7 @@ export default function Office() {
 
   if (fatal && !snap) return <main className="center-wrap"><div className="card center-card"><div className="alert error" role="alert"><Icon name="error" />{fatal}</div></div></main>;
   if (!snap) return <main className="center-wrap"><p className="row muted"><span className="spin" />작업 공간을 여는 중…</p></main>;
+  const remaining = Math.max(0, snap.clock.remaining_seconds - Math.floor((clockNow - syncedAt)/1000));
   const ended = snap.session.status === "SUBMITTED";
   const busy = !!snap.active_run;
   const splitMsg = snap.messages.find((m) => m.meta?.split_proposal);
@@ -148,8 +161,8 @@ export default function Office() {
         <span className="project-name">{snap.brief.title}</span>
         <span className="spacer" />
         {conn === "reconnecting" && <span className="badge info" role="status"><span className="spin" aria-hidden="true" />연결 복구 중</span>}
-        <span className="badge num" aria-label={`가상 시각 ${snap.clock.virtual_time}, 마감 ${snap.clock.deadline}`}>
-          <Icon name="clock" />{snap.clock.virtual_time} · 마감 {snap.clock.deadline}</span>
+        <span className={`badge num ${remaining <= 600 ? "warning" : ""}`} aria-label={`남은 시간 ${fmtElapsed(remaining)}`}>
+          <Icon name="clock" />남은 시간 {fmtElapsed(remaining)}</span>
         <button className="btn btn-sm mobile-switch" onClick={() => setWorkOpen(true)}>내 산출물{snap.approvals.length > 0 && ` · 승인 ${snap.approvals.length}`}</button>
         <button className="btn btn-sm" onClick={() => { setBriefRequired(false); setBriefOpen(true); }}>과제 안내</button>
         {ended ? <span className="badge success"><Icon name="check" />종료</span>
@@ -264,7 +277,7 @@ export default function Office() {
               <li>오른쪽: 내 산출물. 수정한 뒤 &apos;저장&apos;을 눌러야 저장됩니다.</li>
             </ul></div>
           <p className="help">이 시뮬레이션은 협업 상황에서 일하는 방식을 봅니다. 결과물 완성도는 평가하지 않습니다.
-            상단 시각({snap.clock.start}~{snap.clock.deadline})은 가상 시각이며 진행에 따라 바뀝니다. 대화와 작업 기록이 관찰에 사용되며 최종 판단은 사람이 합니다.</p>
+            업무 시간은 시작부터 60분이며 상단에 남은 시간이 표시됩니다. 시간이 끝나면 저장된 상태로 자동 제출됩니다. 대화와 작업 기록이 관찰에 사용되며 최종 판단은 사람이 합니다.</p>
         </div>
       </Modal>
 

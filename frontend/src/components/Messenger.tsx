@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "@/components/Icon";
 import { SplitCard } from "@/components/SplitCard";
-import { ACTOR, DOC_TITLE, fmtTime, type Citation, type Message, type SplitProposal } from "@/lib/types";
+import { ACTOR, DOC_TITLE, fmtElapsed, type Citation, type Message, type SplitProposal } from "@/lib/types";
 
 export type RunView = { state: "running" | "failed"; text: string; runId?: string | null } | null;
 
@@ -86,7 +86,7 @@ export function Messenger(p: Props) {
           )}
           {p.messages.map((m) => {
             if (m.actor === "SYSTEM") {
-              return <div key={m.id} className="sys-row" id={`msg-${m.id}`}><div><Icon name="info" />{m.content}<span className="muted">· {fmtTime(m.created_at)}</span></div></div>;
+              return <div key={m.id} className="sys-row" id={`msg-${m.id}`}><div><Icon name="info" />{m.content}<span className="muted">· {fmtElapsed(m.meta?.elapsed_seconds ?? 0)}</span></div></div>;
             }
             const a = ACTOR[m.actor] ?? ACTOR.SYSTEM;
             const prop = m.meta?.split_proposal;
@@ -98,7 +98,7 @@ export function Messenger(p: Props) {
                     <span className="msg-name">{a.name}</span>
                     {a.badge && <span className={`badge ${a.badge[1]}`}>{a.badge[0]}</span>}
                     {m.actor === "CANDIDATE" && m.meta?.to === "MANAGER" && <span className="badge">→ 박준호 팀장</span>}
-                    <span className="muted num">{fmtTime(m.created_at)}</span>
+                    <span className="muted num">{fmtElapsed(m.meta?.elapsed_seconds ?? 0)}</span>
                   </div>
                   <div className="msg-body"><RichText text={m.content} /></div>
                   {m.citations?.length > 0 && (

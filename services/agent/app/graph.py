@@ -479,7 +479,7 @@ def briefing(state: WorkState) -> dict:
     elif CLAIM.search(text):
         obs.append(("HO-2", "서윤 초안을 자기 것으로 보고"))
     return {"phase": "briefing", "label": "BRIEFING_FOLLOW_UP", "observes": [{"code": c, "event_id": "E4", "evidence": ref, "note": n} for c, n in obs],
-            "reply": None, "effects": {"e4_stage": "DONE", "end_session": True}, "answer_actor": "MANAGER", "targets": []}
+            "reply": None, "effects": {"e4_stage": "DONE", "end_session": False}, "answer_actor": "MANAGER", "targets": []}
 
 
 def _state_gaps(state: WorkState) -> list[str]:
@@ -576,7 +576,7 @@ def reason(state: WorkState) -> dict:
                             ({} if manager else {"allow_pushback": "true" if allow else "false"}))
         mine = [f"{t['key']} {t['title']}({t['status']})" for t in ctx["tasks"] if t["owner"] in ("COLLEAGUE", "SPLIT")]
         brief = "\n".join(f"- {k}: {v}" for k, v in ctx["brief_facts"].items())
-        user = (f"[과제] {ctx['task_summary']}\n[이벤트 기획 브리프 요약]\n{brief}\n[가상 시각] {ctx['session']['virtual_time']}\n"
+        user = (f"[과제] {ctx['task_summary']}\n[이벤트 기획 브리프 요약]\n{brief}\n[경과 시간] {ctx['session']['elapsed_seconds']}\n"
                 f"[너의 담당] {', '.join(mine) or '아직 없음'}")
         pack = H.build_context(system, user, ctx["messages"], [], None, H.rule_summary)
         names = {"CANDIDATE": "지원자", "MANAGER": "박준호 팀장", "SYSTEM": "시스템", "COLLEAGUE": "한서윤"}

@@ -68,7 +68,7 @@ def _call(path: str, params: dict, ctx: Context) -> t.CallToolResult:
 
 
 @mcp.tool(annotations=READ, description=(
-    f"{NOTICE} 관찰 코드(예: CO·N1, CO+5, RS+1)가 기록된 지원자 목록과 각자의 근거 메시지 원문·가상 시각·연결된 회사 조항을 조회한다. "
+    f"{NOTICE} 관찰 코드(예: CO·N1, CO+5, RS+1)가 기록된 지원자 목록과 각자의 근거 메시지 원문·경과 시간·연결된 회사 조항을 조회한다. "
     "event_id(E0~E4)로 장면을 좁힐 수 있다. limit 1~50. 정렬은 세션 종료 시각(최근 순)이며 순위가 아니다. "
     "적합/부적합 판정이나 점수는 없다. 오류: UNAUTHORIZED, INVALID_ARGUMENT."))
 async def find_candidates_by_behavior(code: str, ctx: Context, event_id: str | None = None, limit: int = 20) -> t.CallToolResult:

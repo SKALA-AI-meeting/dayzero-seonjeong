@@ -8,6 +8,8 @@ from __future__ import annotations
 from shared.db import all_, one
 from shared.scenario import codebook, public_definition
 
+from .domain import elapsed_seconds
+
 from .engine import observe, state
 
 
@@ -21,8 +23,8 @@ def session_context(c, s: dict) -> dict:
     st = state(s)
     tasks = all_(c, "SELECT key, title, status, owner, eta, note, version FROM tasks WHERE session_id=%s ORDER BY key", (sid,))
     arts = all_(c, "SELECT key, title, version, length(body) AS chars FROM artifacts WHERE session_id=%s ORDER BY key", (sid,))
-    occ = all_(c, "SELECT event_id, turn, virtual_time, skipped FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
-    return {"turn_count": s["turn_count"], "virtual_time": s["virtual_time"], "phase": s["phase"],
+    occ = all_(c, "SELECT event_id, turn, elapsed_seconds, skipped FROM event_occurrences WHERE session_id=%s ORDER BY created_at", (sid,))
+    return {"turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s), "phase": s["phase"],
             "active_event": st.get("active_event"), "colleague": st.get("colleague"),
             "split_confirmed": bool((st.get("split") or {}).get("confirmed")),
             "tasks": tasks, "artifacts": arts, "events": occ}
@@ -41,7 +43,7 @@ def get_next_event(c, s: dict) -> dict:
     out = {"turn_count": s["turn_count"], "active_event": st.get("active_event"), "awaiting": st.get("awaiting"), "next": None}
     if nxt:
         at = nxt["trigger"].get("at")
-        out["next"] = {"id": nxt["id"], "type": nxt["type"], "trigger": nxt["trigger"], "virtual_time": nxt.get("virtual_time"),
+        out["next"] = {"id": nxt["id"], "type": nxt["type"], "trigger": nxt["trigger"], "elapsed_seconds": elapsed_seconds(s),
                        "turns_until": None if at is None else max(0, at - s["turn_count"]),
                        "optional": bool(nxt.get("optional"))}
     return out

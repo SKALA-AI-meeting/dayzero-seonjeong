@@ -1,13 +1,3 @@
-"""턴 기반 이벤트 엔진 (docs/SCENARIO_SC_A.md 4장, scenario.json events[]).
-
-- 턴 = 지원자 메시지 1개 또는 보드·문서 액션 1개(태스크 변경, 산출물 저장, 분업 제안, 승인 결정). 문서 열람은 턴이 아니다.
-- 이벤트는 trigger(session_start / turn + condition) 순서대로, 세션당 1회만 발생한다(event_occurrences unique).
-  한 턴에 최대 1개만 발생하고 나머지는 다음 턴으로 미룬다. 조건 불충족(E2B)·optional 비활성(E4)은 skipped로 기록한다.
-- 고정 대사는 LLM 없이 그대로 보내고 messages.meta.kind=SCENARIO_EVENT로 구분한다.
-- 무응답(no_response_policy): remind_after_turns 후 SYSTEM 리마인드 1회 → advance_after_turns 추가 후 다음 단계로 자동 진행.
-  E1은 branches의 NO_RESPONSE(after_turns)가, E2는 NOT_REFLECTED가 그 역할을 대신한다.
-- 메시지 턴의 tick(이벤트 발생·무응답 처리)은 그 메시지에 대한 동료 응답 run이 끝난 뒤 실행해 대화 순서를 지킨다.
-"""
 from __future__ import annotations
 
 import re
@@ -16,7 +6,7 @@ from shared.config import settings
 from shared.db import J, all_, one
 
 from .domain import (create_run, emit, enqueue_job, list_tasks, post_line, record_action, scenario_def, set_state,
-                     task_dto, artifact_dto)
+                     task_dto, artifact_dto, elapsed_seconds)
 
 ACTOR = {"manager": "MANAGER", "colleague": "COLLEAGUE"}
 AWAITS_RESPONSE = {"E0", "E1", "E2B", "E3B", "E4"}
@@ -75,72 +65,88 @@ def add_turn(c, s: dict, *, responded: bool = False) -> int:
     return s["turn_count"]
 
 
-def tick(c, s: dict) -> list[str]:
-    """No-response handling, E2 reminder, then fire at most one due event. Caller holds the session row lock."""
+def event_window(ev: dict, occ: dict) -> tuple[int, int] | None:
+    tr = ev["trigger"]
+    if tr["kind"] == "time":
+        return int(tr["open_at"] * 60), int(tr["force_at"] * 60)
+    if tr["kind"] == "after_event":
+        parent = occ.get(tr["event"])
+        if not parent or parent["skipped"]:
+            return None
+        at = parent["elapsed_seconds"]
+        return at + int(tr["open_after"] * 60), at + int(tr["force_after"] * 60)
+    return None
+
+
+def tick(c, s: dict, *, on_action: bool = True) -> list[str]:
     if s["status"] != "ACTIVE":
         return []
-    if one(c, "SELECT 1 FROM runs WHERE session_id=%s AND kind='TEAM' AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')", (s["id"],)):
-        return []  # 응답·승인 대기 중이면 그 run이 끝날 때(run_state) 다시 tick
+    if elapsed_seconds(s) >= 3600:
+        end_session(c, s, actor="SYSTEM", summary="60분 경과: 저장된 상태 자동 제출")
+        return []
+    busy = one(c, "SELECT 1 FROM runs WHERE session_id=%s AND kind='TEAM' AND status IN ('QUEUED','RUNNING','WAITING_APPROVAL')", (s["id"],))
     sc = scenario_def(c, s)
-    no_response(c, s, sc)
-    if s["status"] != "ACTIVE":
+    # E4 is an absolute deadline and can fire even while an approval is pending.
+    if busy:
+        ev = next(e for e in sc["events"] if e["id"] == "E4")
+        if elapsed_seconds(s) >= 3000 and "E4" not in occurred(c, str(s["id"])):
+            fire(c, s, ev, sc, mode="forced")
+            return ["E4"]
         return []
+    no_response(c, s, sc)
     e2_reminder(c, s, sc)
-    return fire_due(c, s, sc)
+    return fire_due(c, s, sc, on_action=on_action)
 
 
-def fire_due(c, s: dict, sc: dict, *, force_next: bool = False) -> list[str]:
-    sid = str(s["id"])
-    occ = occurred(c, sid)
-    st = state(s)
-    fired: list[str] = []
+def fire_due(c, s: dict, sc: dict, *, on_action: bool = True) -> list[str]:
+    occ = occurred(c, str(s["id"]))
+    fired = []
+    at = elapsed_seconds(s)
     for ev in sc["events"]:
         if ev["id"] in occ:
             continue
-        trig = ev["trigger"]
-        if trig["kind"] != "turn":
+        window = event_window(ev, occ)
+        if not window:
             continue
-        if not force_next and s["turn_count"] < trig["at"]:
-            break
-        if ev["id"] == "E2B" and st.get("e2_asked_colleague"):
-            skip(c, s, ev, "E2에서 이미 서윤에게 반영을 요청함(반문은 그 시점에 1회 수행)")
+        opens, forces = window
+        if at < opens or (not on_action and at < forces):
             continue
-        if ev.get("optional") and ev["id"] == "E4" and not settings().event_e4_enabled:
-            skip(c, s, ev, "EVENT_E4_ENABLED=false")
+        if ev["id"] == "E4" and at < forces:
             continue
-        fire(c, s, ev, sc)
+        if ev["id"] == "E2B" and state(s).get("e2_asked_colleague"):
+            skip(c, s, ev, "E2에서 이미 서윤에게 반영을 요청함")
+            continue
+        fire(c, s, ev, sc, mode="forced" if at >= forces else "on_action")
+        occ = occurred(c, str(s["id"]))
         fired.append(ev["id"])
-        break
     return fired
 
 
 def skip(c, s: dict, ev: dict, reason: str) -> None:
-    c.execute("""INSERT INTO event_occurrences(session_id,event_id,turn,virtual_time,skipped,facts)
+    c.execute("""INSERT INTO event_occurrences(session_id,event_id,turn,elapsed_seconds,skipped,facts)
                  VALUES (%s,%s,%s,%s,true,%s) ON CONFLICT DO NOTHING""",
-              (s["id"], ev["id"], s["turn_count"], s["virtual_time"], J({"reason": reason})))
+              (s["id"], ev["id"], s["turn_count"], elapsed_seconds(s), J({"reason": reason})))
     record_action(c, str(s["id"]), "SYSTEM", "EVENT_SKIPPED", ev["id"], {"reason": reason})
     emit(c, str(s["id"]), "EVENT_SKIPPED", {"event_id": ev["id"]}, admin_payload={"event_id": ev["id"], "reason": reason})
 
 
-def fire(c, s: dict, ev: dict, sc: dict) -> None:
+def fire(c, s: dict, ev: dict, sc: dict, *, mode: str = "on_action") -> None:
     sid = str(s["id"])
-    vt = ev.get("virtual_time") or s["virtual_time"]
-    c.execute("UPDATE sessions SET virtual_time=%s WHERE id=%s", (vt, sid))
-    s["virtual_time"] = vt
-    record_action(c, sid, "SYSTEM", "EVENT_TRIGGERED", ev["id"], {"turn": s["turn_count"], "virtual_time": vt})
+    vt = elapsed_seconds(s)
+    record_action(c, sid, "SYSTEM", "EVENT_TRIGGERED", ev["id"], {"turn": s["turn_count"], "elapsed_seconds": vt})
     st = state(s)
     first = None
     for line in ev["script"]:
-        meta = {"kind": "SCENARIO_EVENT", "event_id": ev["id"], "virtual_time": vt}
+        meta = {"kind": "SCENARIO_EVENT", "event_id": ev["id"], "elapsed_seconds": vt}
         if ev["id"] == "E0" and line["actor"] == "colleague":
             meta["split_proposal"] = default_split(sc)
         m = post_line(c, sid, ACTOR[line["actor"]], line["text"], meta=meta)
         first = first or m
-    c.execute("""INSERT INTO event_occurrences(session_id,event_id,turn,virtual_time,facts,first_message_id)
-                 VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
-              (sid, ev["id"], s["turn_count"], vt, J({"type": ev["type"]}), first["id"] if first else None))
+    c.execute("""INSERT INTO event_occurrences(session_id,event_id,turn,elapsed_seconds,occurrence_mode,facts,first_message_id)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+              (sid, ev["id"], s["turn_count"], vt, mode, J({"type": ev["type"]}), first["id"] if first else None))
     st["active_event"] = ev["id"]  # pushback_pending은 유지(반문 뒤 재요청이 다음 이벤트와 겹쳐도 이어서 처리)
-    st["awaiting"] = {"event_id": ev["id"], "since_turn": s["turn_count"], "reminded": False} if ev["id"] in AWAITS_RESPONSE else None
+    st["awaiting"] = {"event_id": ev["id"], "since_seconds": vt, "reminded": False} if ev["id"] in AWAITS_RESPONSE else None
     if ev["id"] == "E0":
         st["split"] = {"proposal": default_split(sc), "rounds": 0, "confirmed": False, "last_label": None,
                        "message_id": str(first["id"]) if first else None}
@@ -158,7 +164,7 @@ def fire(c, s: dict, ev: dict, sc: dict) -> None:
         add_task_and_artifact(c, s, "T4", t4["title"], "CANDIDATE")
         st["e4"] = {"stage": "REPORT"}
     set_state(c, s, st)
-    emit(c, sid, "EVENT_FIRED", {"event_id": ev["id"], "virtual_time": vt, "turn": s["turn_count"]})
+    emit(c, sid, "EVENT_FIRED", {"event_id": ev["id"], "elapsed_seconds": vt, "occurrence_mode": mode, "turn": s["turn_count"]})
 
 
 def add_task_and_artifact(c, s: dict, key: str, title: str, owner: str) -> None:
@@ -181,28 +187,19 @@ def no_response(c, s: dict, sc: dict) -> None:
     if not aw:
         return
     sid = str(s["id"])
-    waited = s["turn_count"] - aw["since_turn"]
+    waited = elapsed_seconds(s) - aw.get("since_seconds", 0)
     ev = next(e for e in sc["events"] if e["id"] == aw["event_id"])
     timeout = next((b for b in ev.get("branches", []) if b["when"] == "NO_RESPONSE"), None)
-    if timeout:  # E1: 3턴 무응답 → 서윤 고정 대사 + CO-1
-        if waited >= timeout["after_turns"]:
-            m = post_line(c, sid, ACTOR[timeout["reply"]["actor"]], timeout["reply"]["text"],
-                          meta={"kind": "SCENARIO_BRANCH", "event_id": ev["id"], "label": "NO_RESPONSE"})
-            for code in timeout.get("observe", []):
-                observe(c, sid, code, ev["id"], {"kind": "message", "id": str(m["id"])}, "3턴 동안 도움 요청에 응답 없음")
-            st["awaiting"] = None
-            set_state(c, s, st)
-        return
     pol = sc["no_response_policy"]
-    if not aw["reminded"] and waited >= pol["remind_after_turns"]:
+    if not aw["reminded"] and waited >= pol["remind_after_minutes"] * 60:
         who = {"E4": "박준호 팀장"}.get(ev["id"], "한서윤")
         post_line(c, sid, "SYSTEM", f"{who}님의 메시지에 아직 답하지 않았습니다.",
                   meta={"kind": "REMINDER", "event_id": ev["id"]})
-        aw.update({"reminded": True, "reminded_turn": s["turn_count"]})
+        aw.update({"reminded": True, "reminded_seconds": elapsed_seconds(s)})
         st["awaiting"] = aw
         set_state(c, s, st)
         return
-    if aw["reminded"] and s["turn_count"] - aw.get("reminded_turn", aw["since_turn"]) >= pol["advance_after_turns"]:
+    if aw["reminded"] and elapsed_seconds(s) - aw.get("reminded_seconds", aw.get("since_seconds", 0)) >= pol["advance_after_minutes"] * 60:
         observe(c, sid, "RS-3", ev["id"], {"kind": "event", "id": ev["id"]}, "리마인드 후에도 무응답 → 다음 단계로 자동 진행")
         st["awaiting"] = None
         set_state(c, s, st)
@@ -213,8 +210,8 @@ def no_response(c, s: dict, sc: dict) -> None:
             st = state(s)
             st["e2b_accepted"] = True
             set_state(c, s, st)
-        elif ev["id"] == "E4":
-            end_session(c, s, actor="SYSTEM", summary="E4 브리핑 무응답으로 자동 종료")
+        if ev["id"] == "E1":
+            observe(c, sid, "CO-1", "E1", {"kind": "event", "id": "E1"}, "3분 후 리마인드, 추가 4분 동안 도움 요청에 응답 없음")
 
 
 def e2_reminder(c, s: dict, sc: dict) -> None:
@@ -222,12 +219,12 @@ def e2_reminder(c, s: dict, sc: dict) -> None:
     st = state(s)
     if st.get("e2_reminded"):
         return
-    occ = one(c, "SELECT turn FROM event_occurrences WHERE session_id=%s AND event_id='E2' AND NOT skipped", (s["id"],))
+    occ = one(c, "SELECT elapsed_seconds FROM event_occurrences WHERE session_id=%s AND event_id='E2' AND NOT skipped", (s["id"],))
     if not occ:
         return
     ev = next(e for e in sc["events"] if e["id"] == "E2")
     br = next(b for b in ev["branches"] if b["when"] == "NOT_REFLECTED")
-    if s["turn_count"] - occ["turn"] < br["after_turns"]:
+    if elapsed_seconds(s) - occ["elapsed_seconds"] < br["after_minutes"] * 60:
         return
     missing = missing_change(c, str(s["id"]), owners=("CANDIDATE",))
     if not missing:
@@ -328,9 +325,9 @@ def end_session(c, s: dict, *, actor: str, summary: str = "") -> str:
         c.execute("UPDATE jobs SET status='DONE' WHERE run_id=%s AND status IN ('QUEUED','LEASED')", (r["id"],))
     c.execute("UPDATE approvals SET status='EXPIRED' WHERE session_id=%s AND status='PENDING'", (sid,))
     seq = record_action(c, sid, actor, "SUBMITTED" if actor == "CANDIDATE" else "AUTO_ENDED", None,
-                        {"summary": summary, "turn": s["turn_count"], "virtual_time": s["virtual_time"]})
+                        {"summary": summary, "turn": s["turn_count"], "elapsed_seconds": elapsed_seconds(s)})
     judge_session(c, s)
-    snapshot = {"last_action_seq": seq, "ended_by": actor, "turn_count": s["turn_count"], "virtual_time": s["virtual_time"],
+    snapshot = {"last_action_seq": seq, "ended_by": actor, "turn_count": s["turn_count"], "elapsed_seconds": elapsed_seconds(s),
                 "artifacts": {a["key"]: a["version"] for a in all_(c, "SELECT key, version FROM artifacts WHERE session_id=%s", (sid,))}}
     rep = one(c, "INSERT INTO reports(session_id,status,source_snapshot) VALUES (%s,'PENDING',%s) RETURNING id", (sid, J(snapshot)))
     from .report import company_target

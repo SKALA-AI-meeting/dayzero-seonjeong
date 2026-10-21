@@ -47,9 +47,6 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
     st = s["scenario_state"] or {}
 
     # 지원자 행동이 턴 N을 만들고 그 턴에 이벤트가 발생하므로, 턴 N의 행동은 '턴 N 이전에 발생한' 마지막 이벤트 시점이다(E0는 턴 0)
-    def vt_at(turn: int) -> str:
-        return next((o["virtual_time"] for o in reversed(occ) if not o["skipped"] and (o["turn"] < (turn or 0) or o["turn"] == 0)), "09:00")
-
     def event_at(turn: int | None) -> str | None:  # 그 턴 시점의 활성 이벤트
         return next((o["event_id"] for o in reversed(occ) if not o["skipped"] and (o["turn"] < (turn or 0) or o["turn"] == 0)), None)
 
@@ -62,11 +59,11 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
         if kind == "message" and rid in by_msg:
             m = by_msg[rid]
             return {"kind": "message", "id": rid, "actor": ACTOR_LABEL[m["actor"]], "quote": m["content"][:400], "turn": m["turn"],
-                    "virtual_time": vt_at(m["turn"]), "at": m["created_at"].astimezone(KST).strftime("%H:%M")}
+                    "elapsed_seconds": (m["meta"] or {}).get("elapsed_seconds", 0), "at": m["created_at"].astimezone(KST).strftime("%H:%M")}
         if kind == "revision" and rid in by_rev:
             r = by_rev[rid]
             return {"kind": "revision", "id": rid, "actor": ACTOR_LABEL[r["actor"]], "artifact": f"{r['key']} {r['title']}",
-                    "diff": _diff(r["body_before"], r["body_after"]), "turn": r["turn"], "virtual_time": vt_at(r["turn"])}
+                    "diff": _diff(r["body_before"], r["body_after"]), "turn": r["turn"], "elapsed_seconds": (r["meta"] or {}).get("elapsed_seconds", 0)}
         if kind == "action" and rid in acts:
             a = acts[rid]
             return {"kind": "action", "id": rid, "action": a["kind"], "entity": a["entity_id"], "payload": a["payload"], "turn": a["turn"]}
@@ -82,7 +79,7 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
             notes.append("동료에게 수정을 요청한 장면 없음")
         competencies.append({
             "key": comp, "label": COMPETENCY_LABEL[comp], "status": status, "status_label": STATUS_LABEL[status],
-            "related_events": [{"event_id": e, "virtual_time": fired[e]["virtual_time"], "turn": fired[e]["turn"]} for e in related],
+            "related_events": [{"event_id": e, "elapsed_seconds": fired[e]["elapsed_seconds"], "turn": fired[e]["turn"]} for e in related],
             "observations": [{"code": o["code"], "definition": cb[o["code"]]["definition"], "polarity":
                               "neutral" if "·N" in o["code"] else ("positive" if "+" in o["code"] else "caution"),
                               "event_id": event_of(o, ev), "subject": o["subject"], "note": (o["note"] or "").replace("[LLM 추정] ", ""),
@@ -106,8 +103,8 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
     tasks = all_(c, "SELECT key, title, status, owner, eta, note FROM tasks WHERE session_id=%s ORDER BY key", (sid,))
     return {
         "schema_version": "3.0", "generation_mode": "RULES", "scenario_id": sc["scenario_id"], "scenario_title": sc["title"],
-        "ended_by": snap.get("ended_by"), "turn_count": snap.get("turn_count"), "virtual_time": snap.get("virtual_time"),
-        "timeline": [{"event_id": o["event_id"], "virtual_time": o["virtual_time"], "turn": o["turn"], "skipped": o["skipped"],
+        "ended_by": snap.get("ended_by"), "turn_count": snap.get("turn_count"), "elapsed_seconds": snap.get("elapsed_seconds"),
+        "timeline": [{"event_id": o["event_id"], "elapsed_seconds": o["elapsed_seconds"], "turn": o["turn"], "skipped": o["skipped"], "occurrence_mode": o["occurrence_mode"],
                       "reason": (o["facts"] or {}).get("reason")} for o in occ],
         "competencies": competencies,
         "planted_errors": planted,

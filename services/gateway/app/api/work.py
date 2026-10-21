@@ -12,7 +12,7 @@ from shared.db import J, one, tx
 from .. import engine
 from ..auth import Principal, admin, candidate, principal
 from ..domain import (active_run, create_run, emit, lock_session, now, read_session, record_action, scenario_def,
-                      set_state)
+                      set_state, elapsed_seconds)
 from ..errors import ApiError
 
 router = APIRouter()
@@ -58,7 +58,7 @@ def split(sid: str, body: SplitIn, p: Principal = Depends(candidate)):
         st = engine.state(s)
         st["split"] = sp
         if (st.get("awaiting") or {}).get("event_id") == "E0":  # 분업 제안은 E0 응답이다(무응답 카운트 재시작)
-            st["awaiting"] = {"event_id": "E0", "since_turn": turn, "reminded": False}
+            st["awaiting"] = {"event_id": "E0", "since_seconds": elapsed_seconds(s), "reminded": False}
         set_state(c, s, st)
         seq = record_action(c, sid, "CANDIDATE", "SPLIT_PROPOSED", sp.get("message_id"),
                             {"proposal": proposal, "round": sp["rounds"], "comment": body.comment})
@@ -163,22 +163,24 @@ def reflection(sid: str, body: ReflectionIn, p: Principal = Depends(candidate)):
 
 @router.post("/sessions/{sid}/demo/advance")
 def demo_advance(sid: str, p: Principal = Depends(admin)):
-    """시연 전용(관리자, APP_ENV=development): 다음 이벤트의 트리거 턴까지 턴을 올리고 이벤트를 발생시킨다."""
+    """Development only: advance the exam clock to the next event opening."""
     if settings().app_env != "development":
         raise ApiError(404, "NOT_FOUND", "사용할 수 없는 기능입니다")
     with tx(dsn()) as c:
         s = lock_session(c, sid, p, require_active=True)
         sc = scenario_def(c, s)
-        done = {r["event_id"] for r in c.execute("SELECT event_id FROM event_occurrences WHERE session_id=%s", (sid,)).fetchall()}
-        nxt = next((e for e in sc["events"] if e["id"] not in done and e["trigger"]["kind"] == "turn"), None)
+        occ = engine.occurred(c, sid)
+        windows = [(e, engine.event_window(e, occ)) for e in sc["events"] if e["id"] not in occ]
+        nxt = next(((e, w) for e, w in windows if w), None)
         if not nxt:
             raise ApiError(409, "VERSION_CONFLICT", "남은 이벤트가 없습니다")
-        if s["turn_count"] < nxt["trigger"]["at"]:
-            c.execute("UPDATE sessions SET turn_count=%s WHERE id=%s", (nxt["trigger"]["at"], sid))
-            s["turn_count"] = nxt["trigger"]["at"]
-        record_action(c, sid, "SYSTEM", "DEMO_ADVANCED", nxt["id"], {"turn": s["turn_count"]})
-        fired = engine.fire_due(c, s, sc)
-    return {"fired": fired, "turn_count": s["turn_count"]}
+        ev, window = nxt
+        delta = max(0, window[0] - elapsed_seconds(s))
+        c.execute("UPDATE sessions SET clock_offset_seconds=clock_offset_seconds+%s WHERE id=%s", (delta, sid))
+        s["clock_offset_seconds"] += delta
+        record_action(c, sid, "SYSTEM", "DEMO_ADVANCED", ev["id"], {"elapsed_seconds": elapsed_seconds(s)})
+        fired = engine.tick(c, s)
+    return {"fired": fired, "elapsed_seconds": elapsed_seconds(s)}
 
 
 @router.get("/reports/{sid}")

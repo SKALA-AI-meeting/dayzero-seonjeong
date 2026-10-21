@@ -83,7 +83,7 @@ async def main() -> int:
         ann = tools["record_observation"].annotations
         check("record_observation: 비파괴·멱등(승인 불필요)", bool(ann and not ann.read_only_hint and not ann.destructive_hint and ann.idempotent_hint))
         p = payload(await b.call_tool("get_session_context", {}))
-        check("get_session_context: 턴·가상 시각·보드", p["ok"] and p["data"]["virtual_time"] == "09:00"
+        check("get_session_context: 턴·경과 시간·보드", p["ok"] and p["data"]["elapsed_seconds"] == "09:00"
               and [t["key"] for t in p["data"]["tasks"]] == ["T1", "T2", "T3"], str(p["data"].get("turn_count")))
         p = payload(await b.call_tool("get_scenario", {}))
         txt = json.dumps(p["data"], ensure_ascii=False)

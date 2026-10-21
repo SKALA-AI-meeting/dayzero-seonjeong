@@ -34,7 +34,7 @@ def dsn() -> str:
 @router.get("/candidates")
 def candidates_by_behavior(code: str = Query(min_length=2, max_length=12), event_id: str | None = Query(None, max_length=8),
                            limit: int = Query(20, ge=1, le=50)):
-    """관찰 코드가 나온 지원자 + 각자의 근거 원문·가상 시각. 정렬은 세션 종료 시각(최근 순)이며 순위가 아니다."""
+    """관찰 코드가 나온 지원자 + 각자의 근거 원문·경과 시간. 정렬은 세션 종료 시각(최근 순)이며 순위가 아니다."""
     with tx(dsn()) as c:
         rows = all_(c, """SELECT s.id, s.submitted_at, pa.alias, r.body FROM reports r JOIN sessions s ON s.id=r.session_id
                           JOIN participants pa ON pa.id=s.participant_id
@@ -51,7 +51,7 @@ def candidates_by_behavior(code: str = Query(min_length=2, max_length=12), event
                 ev.append({"competency": comp["label"], "event_id": o["event_id"], "subject": o["subject"],
                            "llm_estimated": bool(o.get("estimated")), "evidence_kind": e.get("kind"),
                            "quote": e.get("quote") or "\n".join(e.get("diff") or []) or o.get("note"),
-                           "actor": e.get("actor"), "virtual_time": e.get("virtual_time"), "turn": e.get("turn"),
+                           "actor": e.get("actor"), "elapsed_seconds": e.get("elapsed_seconds"), "turn": e.get("turn"),
                            "linked_criterion": (o.get("linked_criterion") or {}).get("text")})
         if ev:  # event_id는 리포트 본문 기준으로 거른다(근거 턴으로 채운 이벤트 포함)
             items.append({"session_id": str(r["id"]), "alias": r["alias"],
@@ -70,6 +70,6 @@ def candidate_report(sid: str):
     if not r or r["status"] != "READY" or not r["body"]:
         raise ApiError(404, "NOT_FOUND", "READY 리포트가 없습니다")
     b = r["body"]
-    keep = ("scenario_title", "generation_mode", "ended_by", "turn_count", "virtual_time", "timeline", "competencies",
+    keep = ("scenario_title", "generation_mode", "ended_by", "turn_count", "elapsed_seconds", "timeline", "competencies",
             "planted_errors", "e2_change", "commitments", "final_board", "company", "limitations")
     return {"session_id": sid, "alias": r["alias"], **{k: b.get(k) for k in keep}, "notice": NOTICE}

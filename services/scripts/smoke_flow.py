@@ -94,9 +94,9 @@ def main() -> int:
     s = x.snap()
     check("E0 스탠드업: 팀장 지시 + 서윤 분업 질문(고정 대사)", [m["actor"] for m in s["messages"]] == ["MANAGER", "COLLEAGUE"]
           and all(m["meta"].get("kind") == "SCENARIO_EVENT" for m in s["messages"]) and "편한 쪽 먼저 골라주세요" in s["messages"][1]["content"])
-    check("초기 보드 T1~T3·산출물(서윤 초안 T2·T3) · 가상 시각 09:00 · 턴 0",
+    check("초기 보드 T1~T3·산출물(서윤 초안 T2·T3) · 경과 시간 09:00 · 턴 0",
           [t["key"] for t in s["tasks"]] == ["T1", "T2", "T3"] and "11/2 ~ 11/31" in x.art(s, "T3")["body"]
-          and "쏴드림" in x.art(s, "T2")["body"] and s["clock"]["virtual_time"] == "09:00" and s["session"]["turn_count"] == 0)
+          and "쏴드림" in x.art(s, "T2")["body"] and s["clock"]["elapsed_seconds"] == "09:00" and s["session"]["turn_count"] == 0)
     docs = x.c.get(f"/sessions/{x.sid}/documents").json()["items"]
     check("공유 문서 4개(코드북 비공개)", [d["id"] for d in docs] == ["brief", "reward-table", "faq-draft", "tone-guide"])
     check("코드북 직접 열람 404", x.c.get(f"/sessions/{x.sid}/documents/criteria").status_code == 404)
@@ -119,7 +119,7 @@ def main() -> int:
     a1 = x.art(s, "T1")
     r = x.c.patch(f"/sessions/{x.sid}/artifacts/T1", json={"base_version": a1["version"], "body": "핏모아 친구 초대 이벤트를 소개합니다. 기간은 11/2부터입니다."})
     s = x.wait(lambda s: "E1" in s["events"])
-    check("턴 5 → E1 서윤 도움 요청(가상 시각 10:30)", "E1" in s["events"] and s["clock"]["virtual_time"] == "10:30"
+    check("턴 5 → E1 서윤 도움 요청(경과 시간 10:30)", "E1" in s["events"] and s["clock"]["elapsed_seconds"] == "10:30"
           and "급한 건 아니에요" in x.last(s, "COLLEAGUE")["content"])
     _, s = x.say("지금은 안내문 마무리 중이라 끝내고 11시에 같이 볼게요.")
     check("E1 시간 약속 → '넵 그때 봐요!'", x.last(s, "COLLEAGUE")["content"] == "넵 그때 봐요!")
@@ -140,7 +140,7 @@ def main() -> int:
     a3 = x.art(s, "T3")
     r = x.c.patch(f"/sessions/{x.sid}/artifacts/T3", json={"base_version": a3["version"], "body": a3["body"].replace("5,000P", "3,000P")})
     s = x.wait(lambda s: "E2" in s["events"])
-    check("턴 9 → E2 팀장 요구사항 변경 + T5 추가", r.status_code == 200 and "E2" in s["events"] and s["clock"]["virtual_time"] == "13:00"
+    check("턴 9 → E2 팀장 요구사항 변경 + T5 추가", r.status_code == 200 and "E2" in s["events"] and s["clock"]["elapsed_seconds"] == "13:00"
           and any(t["key"] == "T5" for t in s["tasks"]) and "2,000P" in x.last(s, "MANAGER")["content"])
     _, s = x.say("팀장님, 피초대자도 첫 결제를 해야 2,000P를 받는 조건인가요?", to="MANAGER")
     check("E2 영향 확인 질문 → 팀장 '가입만 하면 돼요.'", x.last(s, "MANAGER")["content"] == "가입만 하면 돼요.")
@@ -176,7 +176,7 @@ def main() -> int:
     x.c.patch(f"/sessions/{x.sid}/artifacts/T1", json={"base_version": a1["version"],
                                                        "body": a1["body"] + " 초대받은 친구도 가입하면 2,000P를 받습니다."})
     check("턴 17 → E4 마감 전 브리핑 + T4 공개", "E4" in s["events"] and any(t["key"] == "T4" for t in s["tasks"])
-          and s["clock"]["virtual_time"] == "16:50")
+          and s["clock"]["elapsed_seconds"] == "16:50")
     _, s = x.say("팀장님, 안내문·FAQ·표는 정리했고 푸시 문구는 아직 진행 중입니다. 표와 FAQ 초안은 서윤 씨가 만들었어요.", to="MANAGER")
     check("E4 보고 → 팀장 후속 질문 1회(고정 대사)", "이거 다" in x.last(s, "MANAGER")["content"] and "정리한 거죠?" in x.last(s, "MANAGER")["content"])
     x.c.post(f"/sessions/{x.sid}/messages", json={"client_message_id": uuid.uuid4().hex, "channel": "TEAM", "to": "MANAGER",
