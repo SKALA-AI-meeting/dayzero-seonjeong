@@ -28,7 +28,7 @@ INTERNAL = S.gateway_internal_url + "/internal/v1"
 SVC = {"x-service-token": S.internal_service_secret}
 results: list[tuple[str, bool, str]] = []
 BUSINESS = {"get_session_context", "get_scenario", "get_next_event", "get_planted_error", "record_observation",
-            "update_task_status", "patch_artifact_section"}
+            "update_task_status", "suggest_candidate_edit"}
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -76,7 +76,7 @@ async def main() -> int:
     async with client(S.business_mcp_url, btok) as b:
         tools = {t.name: t for t in (await b.list_tools()).tools}
         check("business tools/list 7개", set(tools) == BUSINESS, ",".join(sorted(tools)))
-        ann = tools["patch_artifact_section"].annotations
+        ann = tools["suggest_candidate_edit"].annotations
         check("변경 도구 destructiveHint=true/readOnlyHint=false", bool(ann and ann.destructive_hint and not ann.read_only_hint))
         ann = tools["get_scenario"].annotations
         check("조회 도구 readOnlyHint=true", bool(ann and ann.read_only_hint and not ann.destructive_hint))
@@ -108,7 +108,7 @@ async def main() -> int:
         p = payload(await b.call_tool("record_observation", {"code": "CO+5", "evidence_ref": {"kind": "message", "id": my_msg},
                                                               "subject": "PE-1", "note": "smoke"}))
         check("같은 코드·대상 재기록은 1회만(멱등)", p["ok"] and not p["data"]["recorded"])
-        res = await b.call_tool("patch_artifact_section", {"artifact_key": "T3", "base_version": 1, "content": "x", "targets": ["PE-1"]})
+        res = await b.call_tool("suggest_candidate_edit", {"artifact_key": "T3", "base_version": 1, "content": "x", "targets": ["PE-1"]})
         check("승인 없는 변경 도구 → 권한 오류(isError)", res.is_error, payload(res)["error"]["code"])
         res = await b.call_tool("get_session_context", {"session_id": sid2})
         check("다른 세션 ID 인자 → 거절", res.is_error or "session_id" not in json.dumps(payload(res)))

@@ -26,9 +26,9 @@ from ..report import build_report_body
 router = APIRouter(dependencies=[Depends(internal_service)])
 LEASE = timedelta(seconds=150)
 READ_TOOLS = {"get_session_context", "get_scenario", "get_next_event", "get_planted_error",
-              "search_docs", "search_criteria", "read_resource"}
+              "search_docs", "search_criteria", "read_resource", "read_artifact", "edit_own_artifact"}
 LOG_TOOLS = {"record_observation"}  # 변경이지만 승인 불필요(관찰 기록만, 업무 산출물은 바꾸지 않음)
-WRITE_TOOLS = {"update_task_status", "patch_artifact_section"}  # 승인 필요
+WRITE_TOOLS = {"update_task_status", "suggest_candidate_edit"}  # 승인 필요
 MESSAGE_EVENTS = {"COLLEAGUE_MESSAGE": "COLLEAGUE", "MANAGER_MESSAGE": "MANAGER", "SYSTEM_NOTICE": "SYSTEM"}
 COLLEAGUE_ARTIFACTS = {"T2", "T3"}  # 서윤 초안에서 시작한 산출물(서윤이 승인 후 고칠 수 있는 범위)
 
@@ -304,7 +304,7 @@ def branch(rid: str, body: BranchIn):
 
 class ProposalIn(Strict):
     interrupt_id: str
-    tool_name: Literal["update_task_status", "patch_artifact_section"]
+    tool_name: Literal["update_task_status", "suggest_candidate_edit"]
     args: dict
     base_versions: dict
 
@@ -324,7 +324,7 @@ def proposal(rid: str, body: ProposalIn):
         if s["status"] != "ACTIVE" or r["status"] == "CANCELLED":
             raise ApiError(409, "APPROVAL_STALE", "세션 또는 run이 종료되었습니다")
         check_scope(c, sid, r, body.tool_name, body.args)
-        if body.tool_name == "patch_artifact_section":
+        if body.tool_name == "suggest_candidate_edit":
             a = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s", (sid, body.args["artifact_key"]))
             ba = {"artifact_key": a["key"], "title": a["title"], "before": a["body"], "after": body.args["content"],
                   "targets": body.args.get("targets", [])}
@@ -348,11 +348,14 @@ def check_scope(c, sid: str, run: dict, tool: str, args: dict) -> None:
     """서윤은 지원자의 정정 요청(메시지)으로 시작된 run에서만, 자기 초안 산출물(T2·T3)·자기 태스크만 고칠 수 있다."""
     if run["kind"] != "TEAM" or not run["source_message_id"]:
         raise ToolError("OUT_OF_SCOPE", "지원자 요청으로 시작된 작업에서만 변경을 제안할 수 있습니다")
-    if tool == "patch_artifact_section":
-        if args.get("artifact_key") not in COLLEAGUE_ARTIFACTS:
-            raise ToolError("OUT_OF_SCOPE", f"서윤이 고칠 수 없는 산출물입니다: {args.get('artifact_key')}")
-        if not one(c, "SELECT 1 FROM artifacts WHERE session_id=%s AND key=%s", (sid, args["artifact_key"])):
+    if tool in ("suggest_candidate_edit", "edit_own_artifact"):
+        task = one(c, "SELECT owner FROM tasks WHERE session_id=%s AND key=%s", (sid, args.get("artifact_key")))
+        if not task:
             raise ToolError("NOT_FOUND", "산출물이 없습니다")
+        if tool == "edit_own_artifact" and task["owner"] not in ("COLLEAGUE", "SPLIT"):
+            raise ToolError("OUT_OF_SCOPE", "서윤 담당 문서만 바로 수정할 수 있습니다")
+        if tool == "suggest_candidate_edit" and task["owner"] not in ("CANDIDATE", "SPLIT"):
+            raise ToolError("OUT_OF_SCOPE", "지원자 담당 문서의 검토 수정안만 제안할 수 있습니다")
     elif tool == "update_task_status":
         t = one(c, "SELECT owner FROM tasks WHERE session_id=%s AND key=%s", (sid, args.get("task_key")))
         if not t:
@@ -384,6 +387,14 @@ def mcp_tool(tool_name: str, body: McpIn, request: Request):
             run = one(c, "SELECT * FROM runs WHERE id=%s", (rid,))
             if s["status"] != "ACTIVE" or not run or run["status"] in ("CANCELLED", "FAILED", "SUCCEEDED"):
                 return tool_err("FORBIDDEN", "종료된 세션 또는 run입니다")
+            if tool_name == "read_artifact":
+                a = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s", (sid, body.args.get("artifact_key")))
+                if not a:
+                    raise ToolError("NOT_FOUND", "산출물이 없습니다")
+                record_action(c, sid, "COLLEAGUE", "ARTIFACT_READ", str(a["id"]), {"run_id": rid, "key": a["key"]})
+                return tool_ok(artifact_dto(a))
+            if tool_name == "edit_own_artifact":
+                return edit_own(c, s, run, body.args)
             if tool_name == "get_session_context":
                 return tool_ok(session_context(c, s))
             if tool_name == "get_scenario":
@@ -421,7 +432,7 @@ def execute_write(c, sid: str, run: dict, cap: dict, tool: str, args: dict) -> d
     if a["tool_name"] != tool or a["args_hash"] != args_hash(tool, args):
         raise ToolError("OUT_OF_SCOPE", "승인된 인자와 다른 변경입니다")
     check_scope(c, sid, run, tool, args)
-    if tool == "patch_artifact_section":
+    if tool == "suggest_candidate_edit":
         art = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s FOR UPDATE", (sid, args["artifact_key"]))
         if art["version"] != a["base_versions"].get("artifact_version"):
             c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (approval_id,))
@@ -448,6 +459,33 @@ def execute_write(c, sid: str, run: dict, cap: dict, tool: str, args: dict) -> d
     c.execute("INSERT INTO mutation_receipts(operation_id,session_id,approval_id,result) VALUES (%s,%s,%s,%s)",
               (f"op:{approval_id}", sid, approval_id, J(result)))
     return tool_ok(result)
+
+
+def edit_own(c, s: dict, run: dict, args: dict) -> dict:
+    from shared.scenario import contradicts_brief
+    sid = str(s["id"])
+    check_scope(c, sid, run, "edit_own_artifact", args)
+    art = one(c, "SELECT * FROM artifacts WHERE session_id=%s AND key=%s FOR UPDATE", (sid, args["artifact_key"]))
+    # A replay after a crash returns the committed mutation without adding another version.
+    existing = one(c, "SELECT id, version FROM artifact_revisions WHERE artifact_id=%s AND run_id=%s AND version=%s",
+                   (art["id"], run["id"], args["base_version"]+1))
+    if existing:
+        return tool_ok({"artifact_key": art["key"], "version": existing["version"], "revision_id": str(existing["id"]), "replayed": True})
+    if art["version"] != args["base_version"]:
+        raise ToolError("VERSION_CONFLICT", "작업본이 변경되었습니다")
+    if contradicts_brief(art["body"], args["content"], scenario_def(c, s)):
+        raise ToolError("CONTRADICTS_BRIEF", "브리프와 어긋나는 수정입니다")
+    if art["body"] == args["content"]:
+        return tool_ok({"artifact_key": art["key"], "version": art["version"], "changed": False})
+    before = art["body"]
+    art = one(c, "UPDATE artifacts SET body=%s, version=version+1 WHERE id=%s RETURNING *", (args["content"], art["id"]))
+    rev = one(c, """INSERT INTO artifact_revisions(session_id,artifact_id,version,body_before,body_after,actor,run_id,turn,meta)
+                    VALUES (%s,%s,%s,%s,%s,'COLLEAGUE',%s,%s,%s) RETURNING id""",
+              (sid, art["id"], art["version"], before, art["body"], run["id"], s["turn_count"],
+               J({"targets": args.get("targets", []), "elapsed_seconds": elapsed_seconds(s), "event_id": engine.state(s).get("active_event")})))
+    record_action(c, sid, "COLLEAGUE", "ARTIFACT_PATCHED", str(rev["id"]), {"key": art["key"], "run_id": str(run["id"])})
+    emit(c, sid, "ARTIFACT_UPDATED", {"artifact": artifact_dto(art), "actor": "COLLEAGUE", "before": before, "after": art["body"]}, run_id=str(run["id"]))
+    return tool_ok({"artifact_key": art["key"], "version": art["version"], "revision_id": str(rev["id"]), "before": before, "after": art["body"]})
 
 
 def tool_ok(data: Any, citations: list | None = None) -> dict:

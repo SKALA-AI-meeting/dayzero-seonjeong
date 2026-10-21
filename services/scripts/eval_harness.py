@@ -116,7 +116,7 @@ def h_guard() -> dict:
     from gateway.app.internal.routes import execute_write
     from gateway.app.business import ToolError
     try:
-        execute_write(None, "s", {"id": "r"}, {}, "patch_artifact_section", {})  # capability에 approval_id 없음
+        execute_write(None, "s", {"id": "r"}, {}, "suggest_candidate_edit", {})  # capability에 approval_id 없음
         blocked = False
     except ToolError as e:
         blocked = e.code == "APPROVAL_REQUIRED"

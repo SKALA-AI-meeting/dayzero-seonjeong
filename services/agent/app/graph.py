@@ -38,7 +38,7 @@ gw = Gateway()
 FALLBACK_COLLEAGUE = "넵 알겠어요!"          # 설계서 7장 말투 예시
 MANAGER_DEFER = "그건 서윤 씨랑 정해서 진행해 주세요."  # 설계서 7장 팀장 규칙
 FIXED_REPORT = "고쳤어요"                    # 설계서 4장 E2-b "수정 후 '고쳤어요'"
-CHAT_TOOLS = {"search_docs", "get_session_context"}
+CHAT_TOOLS = {"search_docs", "get_session_context", "read_artifact"}
 
 
 class WorkState(TypedDict, total=False):
@@ -76,6 +76,7 @@ class WorkState(TypedDict, total=False):
     output_rewrite_count: int
     limited: str | None
     error_code: str | None
+    review: dict
     token_usage: dict
 
 
@@ -517,12 +518,11 @@ def apply_effects(state: WorkState) -> dict:
 
 
 def after_effects(state: WorkState) -> str:
-    if (state.get("effects") or {}).get("end_session"):
-        return END
-    if state.get("reply") is None and not state.get("silent_notice") and state.get("label", "NONE") == "NONE" \
-            and state["run_type"] == "message":
-        return "reason"
-    return "respond"
+    if state.get("silent_notice"):
+        return "respond"
+    if state.get("answer_actor") == "MANAGER" and state.get("reply"):
+        return "respond"
+    return "reason"
 
 
 # ---- free conversation (NONE): reason ⇄ call_mcp → validate_output ----------------------------------
@@ -531,7 +531,7 @@ def _llm(json_mode: bool = False):
     from langchain_openai import ChatOpenAI
     kw = {"model_kwargs": {"response_format": {"type": "json_object"}}} if json_mode else {}
     return ChatOpenAI(model=S.openai_model, max_tokens=H.OUTPUT_TOKEN_BUDGET, timeout=30, max_retries=0,
-                      temperature=0 if json_mode else 0.3, **kw)
+                      temperature=0 if json_mode else 0.1, **kw)
 
 
 def _usage(state: WorkState, ai) -> None:
@@ -566,7 +566,8 @@ def reason(state: WorkState) -> dict:
     """해당 분기가 없는 일반 대화. fixture는 고정 대사, live는 페르소나(MCP Prompt) + 읽기 도구."""
     manager = state.get("answer_actor") == "MANAGER"
     if S.llm_mode != "live":
-        return {"plan": [], "answer": MANAGER_DEFER if manager else FALLBACK_COLLEAGUE}
+        answer = fixture_answer(state)
+        return {"plan": [], "answer": MANAGER_DEFER if manager else answer, "reply": None}
     msgs = state.get("llm_messages") or []
     if not msgs:
         ctx = state["ctx"]
@@ -575,9 +576,11 @@ def reason(state: WorkState) -> dict:
         system = get_prompt(gw, state["run_id"], name, {"event_directive": _directive(state)} |
                             ({} if manager else {"allow_pushback": "true" if allow else "false"}))
         mine = [f"{t['key']} {t['title']}({t['status']})" for t in ctx["tasks"] if t["owner"] in ("COLLEAGUE", "SPLIT")]
-        brief = "\n".join(f"- {k}: {v}" for k, v in ctx["brief_facts"].items())
-        user = (f"[과제] {ctx['task_summary']}\n[이벤트 기획 브리프 요약]\n{brief}\n[경과 시간] {ctx['session']['elapsed_seconds']}\n"
-                f"[너의 담당] {', '.join(mine) or '아직 없음'}")
+        user = (f"[과제] {ctx['task_summary']}\n[너의 담당] {', '.join(mine) or '아직 없음'}\n"
+                f"[현재 판단] {state.get('label')}\n[반문 허용] {allow}\n"
+                f"[실행 결과] {json.dumps(state.get('tool_results', []), ensure_ascii=False)}\n"
+                f"[검토 의견] {json.dumps(state.get('review', {}), ensure_ascii=False)}\n"
+                "이미 실행한 수정은 무엇을 어떻게 고쳤는지 구체적으로 말하세요. 실행 실패 시 고쳤다고 말하지 마세요.")
         pack = H.build_context(system, user, ctx["messages"], [], None, H.rule_summary)
         names = {"CANDIDATE": "지원자", "MANAGER": "박준호 팀장", "SYSTEM": "시스템", "COLLEAGUE": "한서윤"}
         me = "MANAGER" if manager else "COLLEAGUE"
@@ -596,7 +599,7 @@ def reason(state: WorkState) -> dict:
     _usage(state, ai)
     calls = [{"id": tc["id"], "name": tc["name"], "args": tc["args"]} for tc in (ai.tool_calls or [])]
     msgs = msgs + [{"role": "assistant", "content": ai.content or "", "tool_calls": calls}]
-    return {"llm_messages": msgs, "token_usage": state.get("token_usage"), "step_count": state.get("step_count", 0) + 1,
+    return {"reply": None, "llm_messages": msgs, "token_usage": state.get("token_usage"), "step_count": state.get("step_count", 0) + 1,
             "plan": [{"tool": c["name"], "args": c["args"], "tool_call_id": c["id"]} for c in calls],
             "answer": ai.content if not calls else ""}
 
@@ -700,12 +703,53 @@ def _apply_ops(body: str, ops: list[dict]) -> str:
     return body
 
 
+def fixture_answer(state: WorkState) -> str:
+    successes = [r for r in state.get("tool_results", []) if r["tool"] == "edit_own_artifact" and r["payload"].get("ok")]
+    if successes:
+        parts = []
+        for r in successes:
+            d = r["payload"]["data"]
+            before, after = d.get("before", ""), d.get("after", "")
+            old = [x for x in before.splitlines() if x not in after.splitlines()]
+            new = [x for x in after.splitlines() if x not in before.splitlines()]
+            parts.append(f"{d['artifact_key']}의 {' / '.join(old)} → {' / '.join(new)}")
+        return "넵, " + "; ".join(parts) + "로 수정했어요. 짚어 주셔서 감사해요!"
+    if state.get("review"):
+        return state["review"]["opinion"]
+    if state.get("label") == "WRONG_CRITICISM":
+        return "앗, 브리프에 동일 결제수단 계정은 제외한다고 되어 있어요. 이 조건은 그대로 두었어요."
+    if state.get("label") == "VAGUE_CRITICISM":
+        return H.SAFE_FALLBACK
+    reply = state.get("reply") or {}
+    text = reply.get("text", FALLBACK_COLLEAGUE)
+    return H.SAFE_FALLBACK if re.search(r"(할게요|볼게요|하겠습니다)", text) else text
+
+
+def review_request(state: WorkState) -> bool:
+    return bool(re.search(r"(검토|리뷰|봐\s*주|봐주|확인해\s*주|확인\s*부탁)", state["text"]) and
+                re.search(r"(제|제가|내|T1|T5|안내문|푸시|공지)", state["text"], re.I) and not state.get("targets"))
+
+
 @_timed
 def propose_fix(state: WorkState) -> dict:
-    """요청받은 대상만 고친다(get_planted_error의 수정 규칙). 정답 값은 수정안 본문에만 들어가고 발화에는 쓰지 않는다.
-
-    응답 전에 실행한다. 안전장치: 수정안이 브리프(brief_facts)와 어긋나면 수정안을 만들지 않고
-    WRONG_CRITICISM 응답("브리프엔 이렇게 돼 있어서요…")으로 바꾸며 정정 요청 코드(CO+5)도 남기지 않는다."""
+    results = list(state.get("tool_results") or [])
+    if review_request(state):
+        candidates = [a for a in state["ctx"]["artifacts"] if a.get("owner") in ("CANDIDATE", "SPLIT")]
+        key = next((a["key"] for a in candidates if a["key"] in state["text"]), None)
+        a = next((a for a in candidates if a["key"] == key), candidates[0] if candidates else None)
+        if not a:
+            return {}
+        payload = mcp(state, "read_artifact", {"artifact_key": a["key"]})
+        results.append({"tool": "read_artifact", "args": {"artifact_key": a["key"]}, "payload": payload})
+        if not payload.get("ok"):
+            return {"tool_results": results}
+        a = payload["data"]
+        opinion, content = review_artifact(state, a)
+        fixes = []
+        if content and content != a["body"]:
+            fixes = [{"artifact_key": a["key"], "base_version": a["version"], "content": content, "targets": ["REVIEW"]}]
+        return {"fixes": fixes, "fix_index": 0, "fix_results": [], "tool_results": results,
+                "review": {"artifact_key": a["key"], "opinion": opinion}}
     if not state.get("targets"):
         return {"fixes": [], "fix_index": 0, "fix_results": []}
     p = mcp(state, "get_planted_error", {"error_ids": state["targets"]})
@@ -714,36 +758,49 @@ def propose_fix(state: WorkState) -> dict:
         for op in it.get("fix", []):
             ops_by_art.setdefault(op["artifact"], []).append(op)
     arts = {a["key"]: a for a in state["ctx"]["artifacts"]}
-    fixes = []
     for key, ops in sorted(ops_by_art.items(), key=lambda kv: kv[0] != "T3"):
         a = arts.get(key)
-        if not a:
+        if not a or a.get("owner") not in ("COLLEAGUE", "SPLIT"):
             continue
         new = _apply_ops(a["body"], ops)
-        if contradicts_brief(a["body"], new):
-            rule = _rule(state, "WRONG_CRITICISM")
-            return {"fixes": [], "targets": [], "fix_index": 0, "fix_results": [], "label": "WRONG_CRITICISM", "label_source": "rule",
-                    "reply": {"actor": "colleague", "text": rule["reply"]},
-                    "observes": [o for o in state.get("observes") or [] if o["code"] != "CO+5"]}
         if new != a["body"]:
-            fixes.append({"artifact_key": key, "base_version": a["version"], "content": new,
-                          "targets": [t for t in state["targets"] if any(o in ops for o in
-                                      next((i["fix"] for i in p["data"]["items"] if i["id"] == t), []))]})
-    return {"fixes": fixes, "fix_index": 0, "fix_results": []}
+            args = {"artifact_key": key, "base_version": a["version"], "content": new, "targets": state["targets"]}
+            payload = mcp(state, "edit_own_artifact", args)
+            results.append({"tool": "edit_own_artifact", "args": args, "payload": payload})
+    return {"fixes": [], "fix_index": 0, "fix_results": [], "tool_results": results}
+
+
+def review_artifact(state: WorkState, artifact: dict) -> tuple[str, str | None]:
+    body = artifact["body"]
+    if S.llm_mode == "live":
+        from langchain_core.messages import SystemMessage, HumanMessage
+        ai = _llm(json_mode=True).invoke([SystemMessage(
+            '요청받은 문서만 검토한다. 한국어 존댓말 2문장 이내. 표현, 톤, 누락 항목, 길이만 검토한다. '
+            '금액·날짜의 정오 대조 금지. 어느 문장인지, 왜, 어떻게 고치면 좋을지 구체적으로 설명한다. 일부러 틀린 의견 금지. '
+            'Return JSON {"opinion":"...","content":"수정 후 전체 본문 or null"}.'),
+            HumanMessage(json.dumps({"title": artifact["title"], "body": body, "request": state["text"]}, ensure_ascii=False))])
+        _usage(state, ai)
+        out = json.loads(ai.content)
+        return out["opinion"], out.get("content")
+    if '쏴드림' in body:
+        return ('앗, “쏴드림”은 고객 안내의 존댓말 톤과 맞지 않아서 “지급해 드립니다”로 바꾸면 좋겠어요.', body.replace('쏴드림', '지급해 드립니다'))
+    if not body.strip():
+        return ('앗, 아직 본문이 비어 있어요. 제목과 참여 방법부터 적으면 안내 내용을 이해하기 좋겠어요.', None)
+    return ('넵, “'+body.splitlines()[0][:70]+'” 문장 뒤에 참여 방법을 항목별로 나누면 읽기 더 편하겠어요.', None)
 
 
 @_timed
 def persist_proposal(state: WorkState) -> dict:
     """Idempotent approval creation BEFORE interrupt (same interrupt_id on replay)."""
     fx = state["fixes"][state["fix_index"]]
-    r = gw.post(f"/runs/{state['run_id']}/proposal", {"interrupt_id": f"fix-{fx['artifact_key']}", "tool_name": "patch_artifact_section",
+    r = gw.post(f"/runs/{state['run_id']}/proposal", {"interrupt_id": f"fix-{fx['artifact_key']}", "tool_name": "suggest_candidate_edit",
                                                       "args": fx, "base_versions": {"artifact_version": fx["base_version"]}})
     return {"approval_id": r["approval_id"]}
 
 
 def await_approval(state: WorkState) -> dict:
     """Only interrupt here — no side effects before/after inside this node."""
-    decision = interrupt({"approval_id": state["approval_id"], "tool_name": "patch_artifact_section"})
+    decision = interrupt({"approval_id": state["approval_id"], "tool_name": "suggest_candidate_edit"})
     return {"decision": decision}
 
 
@@ -754,8 +811,8 @@ def after_approval(state: WorkState) -> str:
 @_timed
 def execute_write(state: WorkState) -> dict:
     fx = state["fixes"][state["fix_index"]]
-    payload, ms = call_tool(gw, state["run_id"], "patch_artifact_section", fx, approval_id=state["approval_id"])
-    gw.event(state["run_id"], "TOOL_END", {"tool_name": "patch_artifact_section", "safe_args": {"artifact_key": fx["artifact_key"],
+    payload, ms = call_tool(gw, state["run_id"], "suggest_candidate_edit", fx, approval_id=state["approval_id"])
+    gw.event(state["run_id"], "TOOL_END", {"tool_name": "suggest_candidate_edit", "safe_args": {"artifact_key": fx["artifact_key"],
                                            "targets": fx["targets"]}, "outcome": "ok" if payload["ok"] else payload["error"]["code"],
                                            "result_summary": payload.get("data") or {}, "duration_ms": ms}, key=f"write:{state['approval_id']}")
     return {"fix_results": (state.get("fix_results") or []) + [{"key": fx["artifact_key"], "ok": payload["ok"],

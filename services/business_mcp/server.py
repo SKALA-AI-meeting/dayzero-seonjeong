@@ -99,14 +99,22 @@ async def update_task_status(task_key: str, base_version: int, status: Literal["
                          ctx, retries=0)
 
 
-@mcp.tool(annotations=WRITE, description=(
-    "지원자의 정정 요청을 받아 서윤 초안 산출물(T2 FAQ, T3 리워드·일정 표) 전체 본문을 수정안으로 바꾼다. "
-    "변경마다 지원자 승인이 필요하며 승인된 인자와 다르면 거절된다. targets는 요청받은 정정 대상(PE-1~4, E2-CHANGE). "
-    "오류: APPROVAL_REQUIRED, APPROVAL_EXPIRED, OUT_OF_SCOPE, VERSION_CONFLICT."))
-async def patch_artifact_section(artifact_key: Literal["T2", "T3"], base_version: int, content: str,
+@mcp.tool(annotations=READ, description="세션의 실제 작업본을 읽는다. 지원자 문서는 검토를 요청받았을 때만 읽는다.")
+async def read_artifact(artifact_key: str, ctx: Context) -> t.CallToolResult:
+    return await forward("read_artifact", {"artifact_key": artifact_key}, ctx, retries=2)
+
+
+@mcp.tool(annotations=WRITE, description="구체적으로 요청받은 서윤 담당 문서를 같은 턴에 수정한다. 브리프와 어긋나는 변경은 거절된다.")
+async def edit_own_artifact(artifact_key: str, base_version: int, content: str, targets: list[str], ctx: Context) -> t.CallToolResult:
+    return await forward("edit_own_artifact", {"artifact_key": artifact_key, "base_version": base_version,
+                                              "content": content, "targets": targets}, ctx, retries=0)
+
+
+@mcp.tool(annotations=WRITE, description="요청받아 검토한 지원자 문서에 표현·톤·누락·길이 수정안을 제안한다. 승인 후에만 적용한다.")
+async def suggest_candidate_edit(artifact_key: str, base_version: int, content: str,
                                  targets: list[str], ctx: Context) -> t.CallToolResult:
-    args = {"artifact_key": artifact_key, "base_version": base_version, "content": content, "targets": targets}
-    return await forward("patch_artifact_section", args, ctx, retries=0)
+    return await forward("suggest_candidate_edit", {"artifact_key": artifact_key, "base_version": base_version,
+                                                   "content": content, "targets": targets}, ctx, retries=0)
 
 
 app = mcp.streamable_http_app(streamable_http_path="/mcp", host="0.0.0.0", stateless_http=True)

@@ -97,7 +97,7 @@ def decide(sid: str, aid: str, body: DecisionIn, p: Principal = Depends(candidat
             c.execute("UPDATE approvals SET status='EXPIRED' WHERE id=%s", (aid,))
             raise ApiError(410, "APPROVAL_EXPIRED", "승인 요청이 만료되었습니다")
         art = one(c, "SELECT version FROM artifacts WHERE session_id=%s AND key=%s", (sid, a["args"].get("artifact_key")))
-        stale = want == "APPROVED" and a["tool_name"] == "patch_artifact_section" and (
+        stale = want == "APPROVED" and a["tool_name"] == "suggest_candidate_edit" and (
             not art or art["version"] != a["base_versions"].get("artifact_version"))
         status = "EXPIRED" if stale else want
         c.execute("UPDATE approvals SET status=%s, decided_at=now(), decision_actor_id=%s WHERE id=%s", (status, p.sub, aid))
