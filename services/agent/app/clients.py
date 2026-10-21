@@ -85,6 +85,21 @@ async def _read(url: str, cap: str, uri: str) -> str:
         return rr.contents[0].text
 
 
+async def _search_many(url: str, queries: list[str]) -> list[dict]:
+    """company-mcp search_criteria를 한 MCP 세션에서 여러 번 호출한다(읽기 전용, capability 불필요)."""
+    out = []
+    async with Client(streamable_http_client(url, http_client=httpx2.AsyncClient(timeout=30))) as c:
+        for q in queries:
+            out.append(_payload(await c.call_tool("search_criteria", {"query": q, "top_k": 1})))
+    return out
+
+
+def search_company_criteria(url: str, queries: list[str]) -> list[dict]:
+    """회사 기준 MCP(URL은 job 입력으로만 받음)에서 질의마다 상위 1개 조항. 실패한 질의는 {}."""
+    res = asyncio.run(_search_many(url, queries))
+    return [((r.get("data") or {}).get("items") or [{}])[0] if r.get("ok") else {} for r in res]
+
+
 def call_tool(gw: Gateway, run_id: str, tool: str, args: dict, approval_id: str | None = None) -> tuple[dict, int]:
     """Real MCP tools/call. Returns (common payload, duration_ms). Never raises for business errors."""
     t0 = time.monotonic()

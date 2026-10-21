@@ -463,6 +463,7 @@ def tool_err(code: str, message: str, retryable: bool = False) -> dict:
 
 class BuildIn(Strict):
     report_id: str
+    hold: bool = False  # True면 본문만 저장(RUNNING)하고 회사 조항 연결(/criteria) 뒤에 READY
 
 
 @router.post("/reports/{sid}/build")
@@ -473,9 +474,11 @@ def build_report(sid: str, body: BuildIn):
             return {"status": rep["status"] if rep else "NOT_FOUND"}
         s = one(c, "SELECT * FROM sessions WHERE id=%s", (sid,))
         report = build_report_body(c, s, rep["source_snapshot"])
-        c.execute("UPDATE reports SET status='READY', body=%s, attempts=attempts+1 WHERE id=%s", (J(to_jsonable(report)), rep["id"]))
-        emit(c, sid, "REPORT_READY", {"report_id": str(rep["id"])})
-    return {"status": "READY"}
+        status = "RUNNING" if body.hold else "READY"
+        c.execute("UPDATE reports SET status=%s, body=%s, attempts=attempts+1 WHERE id=%s", (status, J(to_jsonable(report)), rep["id"]))
+        if status == "READY":
+            emit(c, sid, "REPORT_READY", {"report_id": str(rep["id"])})
+    return {"status": status}
 
 
 @router.get("/reports/{sid}/body")
@@ -485,6 +488,48 @@ def report_body(sid: str):
     if not rep or not rep["body"]:
         raise ApiError(404, "NOT_FOUND", "리포트 없음")
     return {"body": rep["body"]}
+
+
+class CriterionLink(Strict):
+    competency: str
+    index: int
+    criterion: dict
+
+
+class CriteriaIn(Strict):
+    report_id: str
+    company_id: str
+    company_name: str | None = None
+    links: list[CriterionLink] = Field(default_factory=list)
+    error: str | None = None
+
+
+@router.post("/reports/{sid}/criteria")
+def report_criteria(sid: str, body: CriteriaIn):
+    """관찰 코드마다 회사 조항(company-mcp search_criteria 상위 1개)을 linked_criterion으로 붙이고 READY.
+    연결은 근거 첨부일 뿐 판정이 아니다. 조항 원문(quote)은 바꾸지 않는다."""
+    with tx(dsn()) as c:
+        rep = one(c, "SELECT * FROM reports WHERE id=%s AND session_id=%s FOR UPDATE", (body.report_id, sid))
+        if not rep or not rep["body"]:
+            raise ApiError(404, "NOT_FOUND", "리포트 없음")
+        b = dict(rep["body"])
+        comps = {cp["key"]: cp for cp in b["competencies"]}
+        n = 0
+        for ln in body.links:
+            obs = comps.get(ln.competency, {}).get("observations", [])
+            cr = ln.criterion
+            if 0 <= ln.index < len(obs) and cr.get("quote"):
+                doc = cr.get("doc_title") or cr.get("doc_id")
+                obs[ln.index]["linked_criterion"] = {
+                    **{k: cr.get(k) for k in ("company_id", "company_name", "doc_id", "doc_title", "section", "title", "quote", "score", "uri")},
+                    "text": f"이 행동은 귀사 「{doc}」 {cr.get('section')} '{cr.get('title')}' 조항과 관련됩니다"}
+                n += 1
+        b["company"] = {"company_id": body.company_id, "company_name": body.company_name, "linked": n,
+                        "status": "UNAVAILABLE" if body.error else "LINKED", "error": (body.error or None) and body.error[:200],
+                        "note": "회사 조항 연결은 근거 첨부이며 좋다·나쁘다 판정이 아닙니다"}
+        c.execute("UPDATE reports SET status='READY', body=%s WHERE id=%s", (J(b), rep["id"]))
+        emit(c, sid, "REPORT_READY", {"report_id": str(rep["id"])})
+    return {"linked": n}
 
 
 class SummaryIn(Strict):

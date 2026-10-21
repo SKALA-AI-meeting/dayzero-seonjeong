@@ -333,7 +333,8 @@ def end_session(c, s: dict, *, actor: str, summary: str = "") -> str:
     snapshot = {"last_action_seq": seq, "ended_by": actor, "turn_count": s["turn_count"], "virtual_time": s["virtual_time"],
                 "artifacts": {a["key"]: a["version"] for a in all_(c, "SELECT key, version FROM artifacts WHERE session_id=%s", (sid,))}}
     rep = one(c, "INSERT INTO reports(session_id,status,source_snapshot) VALUES (%s,'PENDING',%s) RETURNING id", (sid, J(snapshot)))
-    enqueue_job(c, sid, "REPORT", f"report:{rep['id']}", input_={"report_id": str(rep["id"])})
+    from .report import company_target
+    enqueue_job(c, sid, "REPORT", f"report:{rep['id']}", input_={"report_id": str(rep["id"]), **company_target()})
     emit(c, sid, "SESSION_DONE", {"report_id": str(rep["id"])})
     return str(rep["id"])
 

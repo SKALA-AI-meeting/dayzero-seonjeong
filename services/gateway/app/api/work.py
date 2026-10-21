@@ -195,13 +195,31 @@ def get_report(sid: str, p: Principal = Depends(admin)):
     return {"status": r["status"], "body": body, "report_id": str(r["id"]), "error_code": r["error_code"]}
 
 
+class RetryIn(Strict):
+    company_id: str | None = None
+
+
+@router.get("/companies")
+def companies(p: Principal = Depends(admin)):
+    """리포트 회사 기준 선택지(설정 COMPANY_MCP_URLS의 company_id). URL은 노출하지 않는다."""
+    s = settings()
+    return {"items": [{"company_id": k} for k in s.company_mcp_urls], "default": s.default_company_id}
+
+
 @router.post("/reports/{sid}/retry", status_code=202)
-def retry_report(sid: str, p: Principal = Depends(admin)):
+def retry_report(sid: str, body: RetryIn | None = None, p: Principal = Depends(admin)):
+    """FAILED 리포트 재시도. company_id를 주면 READY 리포트도 그 회사 기준으로 다시 생성한다(관찰 코드·근거는 같음)."""
+    from ..report import company_target
+    company_id = body.company_id if body else None
+    target = company_target(company_id) if company_id else {}
+    if company_id and not target:
+        raise ApiError(400, "INVALID_ARGUMENT", "설정되지 않은 회사입니다")
     with tx(dsn()) as c:
         read_session(c, sid, p)
         r = one(c, "SELECT * FROM reports WHERE session_id=%s FOR UPDATE", (sid,))
-        if not r or r["status"] != "FAILED":
-            raise ApiError(409, "VERSION_CONFLICT", "FAILED 리포트만 재시도할 수 있습니다")
+        if not r or not (r["status"] == "FAILED" or (company_id and r["status"] == "READY")):
+            raise ApiError(409, "VERSION_CONFLICT", "FAILED 리포트만 재시도할 수 있습니다(회사 기준 변경은 READY도 가능)")
         c.execute("UPDATE reports SET status='PENDING', attempts=0, error_code=NULL WHERE id=%s", (r["id"],))
-        c.execute("UPDATE jobs SET status='QUEUED', available_at=now(), attempt=0 WHERE dedupe_key=%s", (f"report:{r['id']}",))
-    return {"report_id": str(r["id"])}
+        c.execute("UPDATE jobs SET status='QUEUED', available_at=now(), attempt=0, input=input || %s WHERE dedupe_key=%s",
+                  (J(target), f"report:{r['id']}"))
+    return {"report_id": str(r["id"]), **({"company_id": target["company_id"]} if target else {})}

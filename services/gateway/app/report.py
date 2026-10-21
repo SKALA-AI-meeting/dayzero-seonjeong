@@ -9,12 +9,21 @@ from __future__ import annotations
 import difflib
 from zoneinfo import ZoneInfo
 
+from shared.config import settings
 from shared.db import all_, one
 from shared.scenario import COMPETENCIES, COMPETENCY_EVENTS, COMPETENCY_LABEL, codebook
 
 KST = ZoneInfo("Asia/Seoul")
 STATUS_LABEL = {"OBSERVED": "관찰됨", "INSUFFICIENT": "관찰 기회 부족", "NO_OPPORTUNITY": "관찰 기회 없음"}
 ACTOR_LABEL = {"CANDIDATE": "지원자", "COLLEAGUE": "한서윤(AI 동료)", "MANAGER": "박준호 팀장", "SYSTEM": "시스템"}
+
+
+def company_target(company_id: str | None = None) -> dict:
+    """리포트 job 입력용 회사 기준: company_id → company-mcp URL(설정 COMPANY_MCP_URLS). 없으면 빈 dict(조항 연결 생략)."""
+    s = settings()
+    cid = company_id or s.default_company_id
+    url = s.company_mcp_urls.get(cid)
+    return {"company_id": cid, "company_mcp_url": url} if url else {}
 
 
 def _diff(before: str, after: str) -> list[str]:
@@ -37,12 +46,15 @@ def build_report_body(c, s: dict, snap: dict) -> dict:
     obs = all_(c, "SELECT * FROM observations WHERE session_id=%s ORDER BY created_at", (sid,))
     st = s["scenario_state"] or {}
 
+    def vt_at(turn: int) -> str:  # 그 턴의 가상 시각 = 그 턴까지 발생한 마지막 이벤트의 시각
+        return next((o["virtual_time"] for o in reversed(occ) if not o["skipped"] and o["turn"] <= (turn or 0)), "09:00")
+
     def evidence(ref: dict) -> dict:
         kind, rid = ref.get("kind"), str(ref.get("id"))
         if kind == "message" and rid in by_msg:
             m = by_msg[rid]
             return {"kind": "message", "id": rid, "actor": ACTOR_LABEL[m["actor"]], "quote": m["content"][:400], "turn": m["turn"],
-                    "at": m["created_at"].astimezone(KST).strftime("%H:%M")}
+                    "virtual_time": vt_at(m["turn"]), "at": m["created_at"].astimezone(KST).strftime("%H:%M")}
         if kind == "revision" and rid in by_rev:
             r = by_rev[rid]
             return {"kind": "revision", "id": rid, "actor": ACTOR_LABEL[r["actor"]], "artifact": f"{r['key']} {r['title']}",

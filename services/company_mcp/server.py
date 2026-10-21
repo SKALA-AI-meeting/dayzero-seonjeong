@@ -33,11 +33,13 @@ def load(company_dir: Path) -> None:
     company = json.loads((company_dir / "company.json").read_text(encoding="utf-8"))
     chunks = []
     for md in sorted(company_dir.glob("*.md")):
-        cur = None
+        cur, doc_title = None, md.stem
         for line in md.read_text(encoding="utf-8").splitlines():
             m = SECTION.match(line)
+            if line.startswith("# "):
+                doc_title = line[2:].strip()
             if m:
-                cur = {"doc_id": md.stem, "section": m.group(1), "title": m.group(2), "lines": []}
+                cur = {"doc_id": md.stem, "doc_title": doc_title, "section": m.group(1), "title": m.group(2), "lines": []}
                 chunks.append(cur)
             elif line.startswith("#"):
                 cur = None
@@ -59,18 +61,18 @@ def _grams(text: str) -> set[str]:
 
 
 def rank(query: str) -> list[tuple[float, int]]:
-    """의미(문장 최대 코사인) 0.6 + 표현(글자 2-gram 중 질의가 조항에 겹치는 비율) 0.4."""
+    """의미(문장 최대 코사인) 0.4 + 표현(글자 2-gram 중 질의가 조항에 겹치는 비율) 0.6. 다국어 MiniLM은 짧은 한국어 조항 구분이 약해 표현 비중을 높였다."""
     qv, qg = embed([query])[0], _grams(query)
     sem = [0.0] * len(_index["chunks"])
     for v, i in zip(_index["vectors"], _index["owner"]):
         sem[i] = max(sem[i], sum(a * b for a, b in zip(qv, v)))
     lex = [len(qg & ch["grams"]) / max(1, len(qg)) for ch in _index["chunks"]]
-    return sorted(((0.6 * s + 0.4 * w, i) for i, (s, w) in enumerate(zip(sem, lex))), reverse=True)
+    return sorted(((0.4 * s + 0.6 * w, i) for i, (s, w) in enumerate(zip(sem, lex))), reverse=True)
 
 
 @mcp.tool(annotations=READ, description=(
     "이 회사의 인재상·역량 평가 매뉴얼에서 행동과 관련된 조항을 찾는다. query는 관찰된 행동 설명(1~400자), top_k 1~5. "
-    "반환: company_id, company_name, doc_id, section, title, quote(조항 원문 그대로), score. "
+    "반환: company_id, company_name, doc_id, doc_title, section, title, quote(조항 원문 그대로), score. "
     "조항 연결은 근거 첨부일 뿐 좋다·나쁘다 판정이 아니다. 오류: INVALID_ARGUMENT, INDEX_NOT_READY."))
 async def search_criteria(query: str, top_k: int = 3) -> t.CallToolResult:
     if not query.strip() or len(query) > 400:
@@ -81,7 +83,8 @@ async def search_criteria(query: str, top_k: int = 3) -> t.CallToolResult:
         return error("INDEX_NOT_READY", "회사 문서가 색인되지 않았습니다")
     scored = rank(query)[:top_k]
     co = _index["company"]
-    items = [{"company_id": co["company_id"], "company_name": co["name"], "doc_id": ch["doc_id"], "section": ch["section"],
+    items = [{"company_id": co["company_id"], "company_name": co["name"], "doc_id": ch["doc_id"], "doc_title": ch["doc_title"],
+              "section": ch["section"],
               "title": ch["title"], "quote": ch["quote"], "score": round(s, 4), "uri": f"policy://{ch['doc_id']}#{ch['section']}"}
              for s, i in scored for ch in [_index["chunks"][i]]]
     return result({"ok": True, "data": {"items": items}, "error": None,

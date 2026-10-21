@@ -9,8 +9,10 @@ import { COPY } from "@/lib/types";
 
 type Evidence = { kind: string; id: string; actor?: string; quote?: string; at?: string; turn?: number; artifact?: string; diff?: string[];
   action?: string; entity?: string };
+type Criterion = { company_id: string; company_name: string | null; doc_id: string; doc_title: string | null; section: string; title: string;
+  quote: string; score: number; text: string };
 type Obs = { code: string; definition: string; polarity: "positive" | "caution" | "neutral"; event_id: string | null; subject: string | null;
-  note: string | null; source: "AGENT" | "RULES"; estimated?: boolean; evidence: Evidence };
+  note: string | null; source: "AGENT" | "RULES"; estimated?: boolean; evidence: Evidence; linked_criterion?: Criterion };
 type Comp = { key: string; label: string; status: "OBSERVED" | "INSUFFICIENT" | "NO_OPPORTUNITY"; status_label: string;
   related_events: { event_id: string; virtual_time: string; turn: number }[]; observations: Obs[]; notes: string[];
   evidence_summary?: { text: string; label: string } };
@@ -26,6 +28,7 @@ type Body = {
     revisions: { id: string; artifact: string; actor: string; version: number; turn: number; diff: string[] }[];
     approvals: { artifact: string; targets: string[]; status: string; diff: string[] }[] };
   reflection: string | null; limitations: string[];
+  company?: { company_id: string; company_name: string | null; linked: number; status: string; note: string };
 };
 const EVENT: Record<string, string> = {
   E0: "스탠드업·분업", E1: "동료 도움 요청", E2: "팀장 요구사항 변경", E2B: "서윤 미반영", E3: "동료 급 이탈", E3B: "동료 복귀", E4: "마감 전 브리핑",
@@ -57,6 +60,8 @@ export default function ReportPage() {
   const [rep, setRep] = useState<{ status: string; body: Body | null; error_code: string | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [companies, setCompanies] = useState<string[]>([]);
+  const [companyId, setCompanyId] = useState("");
 
   const load = useCallback(async () => {
     try { setRep(await api(`/reports/${sid}`)); }
@@ -64,14 +69,19 @@ export default function ReportPage() {
   }, [sid]);
   useEffect(() => { loadMe().then(load); }, [load]);
   useEffect(() => {
+    api<{ items: { company_id: string }[]; default: string }>("/companies")
+      .then((r) => { setCompanies(r.items.map((i) => i.company_id)); setCompanyId((v) => v || r.default); }).catch(() => {});
+  }, []);
+  useEffect(() => { if (rep?.body?.company?.company_id) setCompanyId(rep.body.company.company_id); }, [rep?.body?.company?.company_id]);
+  useEffect(() => {
     if (!rep || rep.status === "READY" || rep.status === "FAILED") return;
     const t = setTimeout(load, 2000);
     return () => clearTimeout(t);
   }, [rep, load]);
 
-  async function retry() {
+  async function retry(company?: string) {
     setBusy(true);
-    try { await api(`/reports/${sid}/retry`, { method: "POST" }); await load(); }
+    try { await api(`/reports/${sid}/retry`, { method: "POST", ...(company ? { json: { company_id: company } } : {}) }); await load(); }
     catch (e) { setError(e instanceof ApiError ? e.message : "다시 생성하지 못했습니다"); }
     finally { setBusy(false); }
   }
@@ -84,11 +94,26 @@ export default function ReportPage() {
         {rep && rep.status !== "READY" && rep.status !== "FAILED" && <p className="row muted"><span className="spin" />{STATE_COPY[rep.status] ?? rep.status}</p>}
         {rep?.status === "FAILED" && (
           <div className="alert error" role="alert"><Icon name="error" /><span style={{ flex: 1 }}>{COPY.report_failed} ({rep.error_code})</span>
-            <button className="btn btn-sm" disabled={busy} onClick={retry}>다시 생성</button></div>
+            <button className="btn btn-sm" disabled={busy} onClick={() => retry()}>다시 생성</button></div>
         )}
         {b && (
           <>
             <div className="alert neutral"><Icon name="info" /><div>{COPY.report_limit}</div></div>
+            {companies.length > 0 && (
+              <div className="card row" style={{ flexWrap: "wrap", gap: 8 }}>
+                <span className="muted">회사 기준</span>
+                <span className="strong">{b.company ? `${b.company.company_name ?? b.company.company_id} (${b.company.company_id})` : "연결 안 됨"}</span>
+                {b.company?.status === "UNAVAILABLE" && <span className="badge warning">조항 서버 연결 실패</span>}
+                <span className="spacer" />
+                <label className="row small" style={{ gap: 6 }}>기준 선택
+                  <select value={companyId} onChange={(e) => setCompanyId(e.target.value)} disabled={busy}>
+                    {companies.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
+                <button className="btn btn-sm" disabled={busy || !companyId || rep?.status !== "READY"} onClick={() => retry(companyId)}>이 기준으로 다시 생성</button>
+                <div className="small muted" style={{ flexBasis: "100%" }}>{b.company?.note ?? "회사 조항 연결은 근거 첨부이며 좋다·나쁘다 판정이 아닙니다"}</div>
+              </div>
+            )}
             <div className="summary-cards">
               <div className="card"><div className="muted">시나리오</div><div className="strong">{b.scenario_title}</div></div>
               <div className="card"><div className="muted">종료</div><div className="strong">{b.ended_by === "CANDIDATE" ? "지원자가 업무 종료" : "자동 종료"} · {b.virtual_time}</div></div>
@@ -128,6 +153,13 @@ export default function ReportPage() {
                       </div>
                       {o.note && <p className="small muted">{o.note}</p>}
                       <EvidenceView e={o.evidence} />
+                      {o.linked_criterion && (
+                        <div className="card-sub small stack" aria-label="연결된 회사 조항">
+                          <div className="row"><span className="badge info">{o.linked_criterion.company_name ?? o.linked_criterion.company_id} · {o.linked_criterion.section}</span>
+                            <span>{o.linked_criterion.text}</span></div>
+                          <blockquote style={{ margin: 0, paddingLeft: 10, borderLeft: "3px solid var(--color-border)", whiteSpace: "pre-wrap" }}>{o.linked_criterion.quote}</blockquote>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </article>
