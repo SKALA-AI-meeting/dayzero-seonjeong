@@ -169,7 +169,17 @@ def list_tasks(c, sid: str) -> list[dict]:
 
 
 def list_artifacts(c, sid: str) -> list[dict]:
-    return [artifact_dto(a) for a in all_(c, "SELECT * FROM artifacts WHERE session_id=%s ORDER BY key", (sid,))]
+    out = []
+    for a in all_(c, "SELECT * FROM artifacts WHERE session_id=%s ORDER BY key", (sid,)):
+        dto = artifact_dto(a)
+        revision = one(c, "SELECT version,body_before,body_after FROM artifact_revisions WHERE artifact_id=%s AND actor='COLLEAGUE' ORDER BY version DESC LIMIT 1", (a["id"],))
+        if revision:
+            before, after = revision["body_before"].splitlines(), revision["body_after"].splitlines()
+            dto["change"] = {"version": revision["version"], "before": "\n".join(x for x in before if x not in after),
+                             "after": "\n".join(x for x in after if x not in before)}
+        out.append(dto)
+    return out
+
 
 
 def to_jsonable(v: Any) -> Any:

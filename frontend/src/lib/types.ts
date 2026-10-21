@@ -7,7 +7,7 @@ export type Message = {
   source_run_id: string | null; created_at: string;
 };
 export type Task = { id: string; key: string; title: string; status: string; owner: Owner; eta: string | null; note: string | null; version: number };
-export type Artifact = { id: string; key: string; title: string; body: string; version: number };
+export type Artifact = { id: string; key: string; title: string; body: string; version: number; change?: { version: number; before: string; after: string } };
 export type Approval = {
   id: string; run_id: string; tool_name: string; args: Record<string, unknown>; status: string; expires_at: string;
   before_after: { artifact_key?: string; title?: string; before?: string; after?: string; targets?: string[]; task_key?: string };

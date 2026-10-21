@@ -1,4 +1,5 @@
 "use client";
+import { fmtElapsed } from "@/lib/types";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -14,11 +15,11 @@ type Criterion = { company_id: string; company_name: string | null; doc_id: stri
 type Obs = { code: string; definition: string; polarity: "positive" | "caution" | "neutral"; event_id: string | null; subject: string | null;
   note: string | null; source: "AGENT" | "RULES"; estimated?: boolean; evidence: Evidence; linked_criterion?: Criterion };
 type Comp = { key: string; label: string; status: "OBSERVED" | "INSUFFICIENT" | "NO_OPPORTUNITY"; status_label: string;
-  related_events: { event_id: string; elapsed_seconds: string; turn: number }[]; observations: Obs[]; notes: string[];
+  related_events: { event_id: string; elapsed_seconds: number; turn: number }[]; observations: Obs[]; notes: string[];
   evidence_summary?: { text: string; label: string } };
 type Body = {
-  scenario_title: string; generation_mode: string; ended_by: string; turn_count: number; elapsed_seconds: string;
-  timeline: { event_id: string; elapsed_seconds: string; turn: number; skipped: boolean; reason: string | null }[];
+  scenario_title: string; generation_mode: string; ended_by: string; turn_count: number; elapsed_seconds: number;
+  timeline: { event_id: string; elapsed_seconds: number; turn: number; occurrence_mode: "on_action" | "forced"; skipped: boolean; reason: string | null }[];
   competencies: Comp[];
   planted_errors: { id: string; where: string; difficulty: string; fixed: boolean; fixed_by: string | null; codes: string[] }[];
   e2_change: { occurred: boolean; reflected: Record<string, boolean> };
@@ -116,7 +117,7 @@ export default function ReportPage() {
             )}
             <div className="summary-cards">
               <div className="card"><div className="muted">시나리오</div><div className="strong">{b.scenario_title}</div></div>
-              <div className="card"><div className="muted">종료</div><div className="strong">{b.ended_by === "CANDIDATE" ? "지원자가 업무 종료" : "자동 종료"} · {b.elapsed_seconds}</div></div>
+              <div className="card"><div className="muted">종료</div><div className="strong">{b.ended_by === "CANDIDATE" ? "지원자가 업무 종료" : "자동 종료"} · {fmtElapsed(b.elapsed_seconds)}</div></div>
               <div className="card"><div className="muted">진행 턴</div><div className="strong num">{b.turn_count}</div></div>
               <div className="card"><div className="muted">기록된 관찰 코드</div><div className="strong num">{b.competencies.reduce((n, c) => n + c.observations.length, 0)}</div></div>
             </div>
@@ -125,7 +126,7 @@ export default function ReportPage() {
               <div className="table-wrap"><table>
                 <thead><tr><th>이벤트</th><th>경과 시간</th><th className="num">턴</th><th>상태</th></tr></thead>
                 <tbody>{b.timeline.map((t) => (
-                  <tr key={t.event_id}><td>{t.event_id} {EVENT[t.event_id]}</td><td className="num">{t.elapsed_seconds}</td><td className="num">{t.turn}</td>
+                  <tr key={t.event_id}><td>{t.event_id} {EVENT[t.event_id]}</td><td className="num">{fmtElapsed(t.elapsed_seconds)} · {t.occurrence_mode === "forced" ? "강제" : "행동 후"}</td><td className="num">{t.turn}</td>
                     <td>{t.skipped ? <span className="badge" title={t.reason ?? ""}>건너뜀 · {t.reason}</span> : <span className="badge success">발생</span>}</td></tr>))}</tbody>
               </table></div>
             </section>
@@ -135,7 +136,7 @@ export default function ReportPage() {
                 <article key={c.key} className="card stack" aria-labelledby={`c-${c.key}`}>
                   <div className="row"><h3 id={`c-${c.key}`}>{c.label}</h3>
                     <span className={`badge ${STATUS[c.status][0]}`}><Icon name={STATUS[c.status][1]} />{c.status_label}</span><span className="spacer" />
-                    <span className="muted">관련 이벤트: {c.related_events.length ? c.related_events.map((e) => `${e.event_id}(${e.elapsed_seconds})`).join(", ") : "발생 없음"}</span>
+                    <span className="muted">관련 이벤트: {c.related_events.length ? c.related_events.map((e) => `${e.event_id}(${fmtElapsed(e.elapsed_seconds)})`).join(", ") : "발생 없음"}</span>
                   </div>
                   {c.notes.map((n) => <div key={n} className="limits small"><Icon name="info" /> {n}</div>)}
                   {c.evidence_summary && <div className="interp small"><span className="badge info">{c.evidence_summary.label}</span> {c.evidence_summary.text}</div>}

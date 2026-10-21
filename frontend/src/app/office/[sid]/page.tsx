@@ -101,6 +101,16 @@ export default function Office() {
     return () => unsub?.();
   }, [sid, refresh, scheduleRefresh, router]);
 
+  useEffect(() => {
+    if (!snap) return;
+    setDocView((current) => {
+      if (!current) return current;
+      const key = current.doc.id === "reward-table" ? "T3" : current.doc.id === "faq-draft" ? "T2" : null;
+      const a = snap.artifacts.find((item) => item.key === key);
+      return a ? { ...current, doc: { ...current.doc, body: a.body, version: a.version } } : current;
+    });
+  }, [snap]);
+
   async function openDocument(id: string, quote: string | null = null) {
     try {
       const d = await api<Doc>(`/sessions/${sid}/documents/${id}`);
@@ -268,7 +278,7 @@ export default function Office() {
           <div className="stack"><h4>함께 일하는 사람</h4>
             <ul className="checklist">
               <li>박준호 팀장 — 운영팀장. 업무 지시와 변경 사항을 알려 줍니다.</li>
-              <li>한서윤 — 운영팀 1년차 AI 동료. 메신저로 대화하고, 수정을 부탁하면 수정안을 보내 확인을 받습니다.</li>
+              <li>한서윤 — 운영팀 1년차 AI 동료. 메신저로 대화하고, 담당 문서의 수정을 부탁하면 고친 내용을 알려 줍니다. 내 문서 검토 수정안은 승인 후 반영됩니다.</li>
             </ul></div>
           <div className="stack"><h4>화면 안내</h4>
             <ul className="checklist">

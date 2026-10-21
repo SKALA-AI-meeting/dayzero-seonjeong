@@ -34,11 +34,12 @@ def start_session(c, s: dict) -> None:
     """Create board/artifacts from scenario.json and fire session_start events (E0). Caller holds row lock."""
     sid = str(s["id"])
     sc = scenario_def(c, s)
+    provisional = default_split(sc)
     for t in sc["tasks"]:
         if t["status"] == "HIDDEN":
             continue  # T4는 E4에서 공개
-        c.execute("INSERT INTO tasks(session_id,key,title,status,owner,note) VALUES (%s,%s,%s,%s,'UNASSIGNED',%s)",
-                  (sid, t["id"], t["title"], "IN_PROGRESS" if t["status"] == "IN_PROGRESS" else "TODO", t.get("note")))
+        c.execute("INSERT INTO tasks(session_id,key,title,status,owner,note) VALUES (%s,%s,%s,%s,%s,%s)",
+                  (sid, t["id"], t["title"], "IN_PROGRESS" if t["status"] == "IN_PROGRESS" else "TODO", provisional.get(t["id"], "SPLIT"), t.get("note")))
     initial = {"T1": "", "T2": doc_body(c, "faq-draft"), "T3": doc_body(c, "reward-table")}
     for key, body in initial.items():
         c.execute("INSERT INTO artifacts(session_id,key,title,body,initial_body) VALUES (%s,%s,%s,%s,%s)",
@@ -135,12 +136,26 @@ def fire(c, s: dict, ev: dict, sc: dict, *, mode: str = "on_action") -> None:
     vt = elapsed_seconds(s)
     record_action(c, sid, "SYSTEM", "EVENT_TRIGGERED", ev["id"], {"turn": s["turn_count"], "elapsed_seconds": vt})
     st = state(s)
+    if ev["id"] == "E3":
+        st["departure_artifacts"] = {a["key"]: {"version": a["version"], "body": a["body"]} for a in all_(c,
+            "SELECT a.key,a.version,a.body FROM artifacts a JOIN tasks t ON t.session_id=a.session_id AND t.key=a.key WHERE a.session_id=%s AND a.key IN ('T2','T3') AND t.owner IN ('COLLEAGUE','SPLIT')", (sid,))}
     first = None
     for line in ev["script"]:
         meta = {"kind": "SCENARIO_EVENT", "event_id": ev["id"], "elapsed_seconds": vt}
         if ev["id"] == "E0" and line["actor"] == "colleague":
             meta["split_proposal"] = default_split(sc)
-        m = post_line(c, sid, ACTOR[line["actor"]], line["text"], meta=meta)
+        content = line["text"]
+        if ev["id"] == "E3B" and line["actor"] == "colleague":
+            changes = []
+            for key, old in st.get("departure_artifacts", {}).items():
+                revisions = all_(c, "SELECT body_before,body_after FROM artifact_revisions r JOIN artifacts a ON a.id=r.artifact_id WHERE r.session_id=%s AND a.key=%s AND r.version>%s AND r.actor='CANDIDATE' ORDER BY r.version", (sid,key,old["version"]))
+                for rev in revisions:
+                    before, after = rev["body_before"].splitlines(), rev["body_after"].splitlines()
+                    added = [ln.strip('| ') for ln in after if ln not in before]
+                    if added:
+                        changes.append(f"{key}의 “{' / '.join(added)[:130]}”로 바뀐 부분")
+            content = ("다녀왔어요! 제 문서에서 " + ", ".join(changes) + " 봤어요, 수정해 주셔서 감사해요.") if changes else "다녀왔어요! 혹시 제 표 보셨어요?"
+        m = post_line(c, sid, ACTOR[line["actor"]], content, meta=meta)
         first = first or m
     c.execute("""INSERT INTO event_occurrences(session_id,event_id,turn,elapsed_seconds,occurrence_mode,facts,first_message_id)
                  VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
