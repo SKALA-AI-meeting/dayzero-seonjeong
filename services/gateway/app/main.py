@@ -26,6 +26,8 @@ except ImportError:  # pragma: no cover
 try:
     from .internal import routes as internal_routes
     app.include_router(internal_routes.router, prefix="/internal/v1")
+    from .internal import dayzero as dayzero_routes
+    app.include_router(dayzero_routes.router, prefix="/internal/v1")
 except ImportError:  # pragma: no cover
     pass
 
